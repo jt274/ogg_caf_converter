@@ -1,4 +1,4 @@
-import 'package:ogg_caf_converter/ogg_models.dart';
+import 'package:ogg_caf_converter/models/ogg_models.dart';
 import 'package:test/test.dart';
 
 void main() {

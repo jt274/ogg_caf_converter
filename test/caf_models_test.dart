@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:ogg_caf_converter/caf_models.dart';
+import 'package:ogg_caf_converter/models/caf_models.dart';
 import 'package:test/test.dart';
 
 void main() {

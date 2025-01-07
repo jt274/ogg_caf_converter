@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'caf_models.dart';
-import 'logger.dart';
-import 'ogg_models.dart';
+import 'models/caf_models.dart';
+import 'models/ogg_models.dart';
+import 'utils/logger.dart';
 
 /// A class for converting OPUS audio data to and from OGG and CAF container formats.
 class OpusCaf {
