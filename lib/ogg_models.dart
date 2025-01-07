@@ -9,6 +9,7 @@ const String idPageSignature = 'OpusHead';
 const int pageHeaderLen = 27;
 const int idPagePayloadLength = 19;
 
+/// Enum representing possible errors that can occur while reading an Ogg file.
 enum OggReaderError {
   nilStream,
   badIDPageSignature,
@@ -18,25 +19,38 @@ enum OggReaderError {
   shortPageHeader,
 }
 
+/// Class representing the result of parsing an Ogg page.
 class OggPageResult {
   OggPageResult({required this.segments, this.pageHeader, this.error});
+
+  /// List of segments in the Ogg page.
   final List<List<int>> segments;
+
+  /// Header of the Ogg page.
   final OggPageHeader? pageHeader;
+
+  /// Error encountered while parsing the Ogg page, if any.
   final OggReaderError? error;
 }
 
+/// Class representing Opus data extracted from an Ogg file.
 class OpusData {
   OpusData(
       {required this.audioData,
       required this.trailingData,
       required this.frameSize});
+
+  /// List of audio data bytes.
   final List<int> audioData;
+
+  /// List of trailing data bytes.
   final List<int> trailingData;
+
+  /// Size of the audio frame.
   final int frameSize;
 }
 
-// OggHeader is the metadata from the first two pages
-// in the file (ID and Comment)
+/// Class representing the header data from the Ogg file.
 class OggHeader {
   OggHeader({
     required this.channelMap,
@@ -55,8 +69,8 @@ class OggHeader {
   late int version;
 }
 
-// OggPageHeader is the metadata for a Page
-// Pages are the fundamental unit of multiplexing in an Ogg stream
+/// Class representing the metadata for an Ogg page.
+/// Pages are the fundamental unit of multiplexing in an Ogg stream.
 class OggPageHeader {
   OggPageHeader({
     required this.granulePosition,
@@ -77,6 +91,7 @@ class OggPageHeader {
   late int segmentsCount;
 }
 
+/// Class for reading and parsing Ogg files.
 class OggReader {
   OggReader(String filePath) {
     final File file = File(filePath);
@@ -84,13 +99,15 @@ class OggReader {
   }
 
   late String filePath;
-
   late RandomAccessFile? raFile;
 
+  /// Closes the Ogg file.
   Future<void> close() async {
     await raFile?.close();
   }
 
+  /// Reads the headers from the Ogg file.
+  /// Throws an exception if an error occurs while reading the headers.
   Future<OggHeader> readHeaders() async {
     final OggPageResult result = await parseNextPage();
     final List<List<int>> segments = result.segments;
@@ -145,6 +162,8 @@ class OggReader {
     return header;
   }
 
+  /// Reads Opus data from the Ogg file.
+  /// Throws an exception if an error occurs while reading the Opus data.
   Future<OpusData> readOpusData({required int sampleRate}) async {
     final List<int> audioData = <int>[];
     int frameSize = 0;
@@ -199,6 +218,8 @@ class OggReader {
         audioData: audioData, trailingData: trailingData, frameSize: frameSize);
   }
 
+  /// Parses the next page in the Ogg file.
+  /// Returns an [OggPageResult] containing the parsed segments and page header.
   Future<OggPageResult> parseNextPage() async {
     final Uint8List h = Uint8List(pageHeaderLen);
 
