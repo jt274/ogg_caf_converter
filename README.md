@@ -4,7 +4,7 @@
         <img src="https://github.com/jt274/ogg_caf_converter/actions/workflows/run_tests.yml/badge.svg?branch=main" alt="Build Status" />
     </a>
     <a href='https://coveralls.io/github/jt274/ogg_caf_converter?branch=main'>
-        <img src='https://coveralls.io/repos/github/jt274/ogg_caf_converter/badge.svg?branch=dev' alt='Coverage Status' />
+        <img src='https://coveralls.io/repos/github/jt274/ogg_caf_converter/badge.svg?branch=main' alt='Coverage Status' />
     </a>
     <a href="https://www.paypal.com/ncp/payment/HFAXZ7CTFQC6L">
         <img src="https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal" alt="Donate" />
