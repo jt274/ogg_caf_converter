@@ -2,11 +2,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+/// Beginning of stream type for the Ogg page header.
 const int pageHeaderTypeBeginningOfStream = 0x02;
+
+/// Signature of the Ogg page header.
 const String pageHeaderSignature = 'OggS';
+
+/// Signature of the ID page.
 const String idPageSignature = 'OpusHead';
 
+/// Length of the Ogg page header.
 const int pageHeaderLen = 27;
+
+/// Length of the ID page payload.
 const int idPagePayloadLength = 19;
 
 /// Enum representing possible errors that can occur while reading an Ogg file.
@@ -61,11 +69,22 @@ class OggHeader {
     required this.version,
   });
 
+  /// Channel map.
   late int channelMap;
+
+  /// Number of channels.
   late int channels;
+
+  /// Output gain.
   late int outputGain;
+
+  /// Pre-skip.
   late int preSkip;
+
+  /// Sample rate.
   late int sampleRate;
+
+  /// Version.
   late int version;
 }
 
@@ -82,12 +101,25 @@ class OggPageHeader {
     required this.segmentsCount,
   });
 
+  /// Granule position.
   late int granulePosition;
+
+  /// Signature.
   late List<int> sig;
+
+  /// Version.
   late int version;
+
+  /// Header type.
   late int headerType;
+
+  /// Serial.
   late int serial;
+
+  /// Index.
   late int index;
+
+  /// Number of segments.
   late int segmentsCount;
 }
 
@@ -98,7 +130,10 @@ class OggReader {
     raFile = file.openSync();
   }
 
+  /// Path to the Ogg file.
   late String filePath;
+
+  /// Random access file for the Ogg file.
   late RandomAccessFile? raFile;
 
   /// Closes the Ogg file.

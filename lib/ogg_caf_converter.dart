@@ -7,7 +7,7 @@ import 'models/ogg_models.dart';
 import 'utils/logger.dart';
 
 /// A class for converting OPUS audio data to and from OGG and CAF container formats.
-class OpusCaf {
+class OggCafConverter {
   /// Converts OPUS audio data from OGG to CAF container format and saves it to the specified output path.
   ///
   /// [inputFile] is the path to the OPUS audio file in OGG container to be converted.
@@ -457,6 +457,8 @@ class OpusCaf {
 /// A class for reading CAF files.
 class CafReader {
   CafReader(this.filePath);
+
+  /// The path to the CAF file.
   final String filePath;
 
   /// Reads the audio data from the CAF file.
@@ -628,8 +630,11 @@ class CafReader {
 /// A class representing an OGG file.
 class OggFile {
   OggFile({required this.pages});
+
+  /// The pages in the OGG file.
   List<OggPage> pages;
 
+  /// Encodes the OGG file to a list of bytes.
   List<int> encode() {
     final List<int> fileData = <int>[];
     for (final OggPage page in pages) {
@@ -640,8 +645,13 @@ class OggFile {
   }
 }
 
+/// A class representing an OGG page.
 class OggPage {
   OggPage({required this.header, required this.body});
+
+  /// The header of the OGG page.
   List<int> header;
+
+  /// The body of the OGG page.
   List<int> body;
 }

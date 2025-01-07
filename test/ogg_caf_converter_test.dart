@@ -5,13 +5,14 @@ import 'package:test/test.dart';
 
 void main() {
   group('OpusCaf', () {
-    final OpusCaf opusCaf = OpusCaf();
+    final OggCafConverter oggCafConverter = OggCafConverter();
 
     test('converts OGG to CAF successfully', () async {
       const String inputFile = 'test_resources/test.ogg';
       const String outputFile = 'test_resources/test_output.caf';
       // Convert OGG to CAF
-      await opusCaf.convertOggToCaf(input: inputFile, output: outputFile);
+      await oggCafConverter.convertOggToCaf(
+          input: inputFile, output: outputFile);
       // Check if the output file exists
       expect(File(outputFile).existsSync(), isTrue);
       // Check if input file still exists
@@ -24,7 +25,8 @@ void main() {
       const String inputFile = 'test_resources/test.caf';
       const String outputFile = 'test_resources/test_output.ogg';
       // Convert CAF to OGG
-      await opusCaf.convertCafToOgg(input: inputFile, output: outputFile);
+      await oggCafConverter.convertCafToOgg(
+          input: inputFile, output: outputFile);
       // Check if the output file exists
       expect(File(outputFile).existsSync(), isTrue);
       // Check if input file still exists
@@ -39,7 +41,7 @@ void main() {
       // Create temporary input file for test
       File('test_resources/test.ogg').copySync(inputFile);
       // Convert OGG to CAF
-      await opusCaf.convertOggToCaf(
+      await oggCafConverter.convertOggToCaf(
         input: inputFile,
         output: outputFile,
         deleteInput: true,
@@ -56,7 +58,7 @@ void main() {
       // Create temporary input file for test
       File('test_resources/test.caf').copySync(inputFile);
       // Convert CAF to OGG
-      await opusCaf.convertCafToOgg(
+      await oggCafConverter.convertCafToOgg(
         input: inputFile,
         output: outputFile,
         deleteInput: true,
@@ -71,7 +73,8 @@ void main() {
       const String inputFile = 'test_resources/invalid_ogg.opus';
       const String outputFile = 'test_resources/test_temp.opus';
       expect(
-          () => opusCaf.convertOggToCaf(input: inputFile, output: outputFile),
+          () => oggCafConverter.convertOggToCaf(
+              input: inputFile, output: outputFile),
           throwsException);
     });
 
@@ -79,7 +82,8 @@ void main() {
       const String inputFile = 'test_resources/invalid_caf.opus';
       const String outputFile = 'test_resources/test_temp.opus';
       expect(
-          () => opusCaf.convertOggToCaf(input: inputFile, output: outputFile),
+          () => oggCafConverter.convertOggToCaf(
+              input: inputFile, output: outputFile),
           throwsException);
     });
 
@@ -87,7 +91,8 @@ void main() {
       const String inputFile = 'test_resources/non_existent.opus';
       const String outputFile = 'test_resources/test_temp.opus';
       expect(
-          () => opusCaf.convertOggToCaf(input: inputFile, output: outputFile),
+          () => oggCafConverter.convertOggToCaf(
+              input: inputFile, output: outputFile),
           throwsException);
     });
 
@@ -95,7 +100,8 @@ void main() {
       const String inputFile = 'test_resources/non_existent.opus';
       const String outputFile = 'test_resources/test_temp.opus';
       expect(
-          () => opusCaf.convertCafToOgg(input: inputFile, output: outputFile),
+          () => oggCafConverter.convertCafToOgg(
+              input: inputFile, output: outputFile),
           throwsException);
     });
   });

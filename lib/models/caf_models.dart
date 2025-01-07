@@ -28,11 +28,22 @@ class FourByteString {
 
 /// A class containing predefined FourByteString types for different chunk types.
 class ChunkTypes {
+  /// Chunk type for audio description.
   static final FourByteString audioDescription = FourByteString('desc');
+
+  /// Chunk type for channel layout.
   static final FourByteString channelLayout = FourByteString('chan');
+
+  /// Chunk type for information.
   static final FourByteString information = FourByteString('info');
+
+  /// Chunk type for audio data.
   static final FourByteString audioData = FourByteString('data');
+
+  /// Chunk type for packet table.
   static final FourByteString packetTable = FourByteString('pakt');
+
+  /// Chunk type for MIDI.
   static final FourByteString midi = FourByteString('midi');
 }
 
@@ -155,6 +166,7 @@ class UnknownContents {
   }
 }
 
+/// MIDI data in a CAF file.
 typedef Midi = Uint8List;
 
 /// A class representing information in a CAF file.
