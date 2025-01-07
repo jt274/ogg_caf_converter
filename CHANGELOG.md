@@ -1,3 +1,9 @@
+# 0.1.2
+
+* Release date: Jan 7, 2025
+* Remove `path` as direct dependency.
+* Relax dart SDK version constraint.
+
 # 0.1.1
 
 * Release date: Jan 7, 2025
