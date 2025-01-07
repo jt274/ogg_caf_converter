@@ -485,15 +485,6 @@ class FileHeader {
   /// The flags of the file.
   int fileFlags;
 
-  /// Decodes the file header from a Uint8List.
-  void decode(Uint8List reader) {
-    final ByteData data = ByteData.sublistView(reader);
-    fileType =
-        FourByteString(utf8.decode(data.buffer.asUint8List().sublist(0, 4)));
-    fileVersion = data.getInt16(4);
-    fileFlags = data.getInt16(6);
-  }
-
   /// Encodes the file header to a Uint8List.
   Uint8List encode() {
     final ByteData writer = ByteData(8);

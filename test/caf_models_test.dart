@@ -32,6 +32,11 @@ void main() {
       final FourByteString fourByteString2 = FourByteString('diff');
       expect(fourByteString1, isNot(equals(fourByteString2)));
     });
+
+    test('hashCode returns correct value', () {
+      final FourByteString fourByteString = FourByteString('test');
+      expect(fourByteString.hashCode, equals(fourByteString.bytes.hashCode));
+    });
   });
 
   group('ChunkHeader', () {
@@ -120,6 +125,15 @@ void main() {
       expect(ByteData.sublistView(encoded).getInt32(16), equals(3));
       expect(ByteData.sublistView(encoded).getInt32(20), equals(4));
       expect(encoded.sublist(24), equals(<int>[5, 6, 7]));
+    });
+  });
+
+  group('UnknownContents', () {
+    test('encodes UnknownContents correctly', () {
+      final Uint8List data = Uint8List.fromList(<int>[1, 2, 3, 4]);
+      final UnknownContents unknownContents = UnknownContents(data);
+      final Uint8List encoded = unknownContents.encode();
+      expect(encoded, equals(data));
     });
   });
 }

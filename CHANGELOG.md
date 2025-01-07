@@ -1,5 +1,5 @@
-## 0.1.0
+# 0.1.0
 
-* Release date: Jan 5, 2025
-* Initial release.
+* Release date: Jan 7, 2025
+* Initial development release.
 * Supports Android and iOS platforms.

@@ -1,15 +1,30 @@
+<h1 style="text-align: center;">OPUS Audio OGG/CAF Converter</h1>
+<p style="text-align: center;">
+    <a href="https://github.com/jt274/ogg_caf_converter/actions">
+        <img src="https://github.com/jt274/ogg_caf_converter/actions/workflows/run_tests.yml/badge.svg?branch=main" alt="Build Status" />
+    </a>
+    <a href='https://coveralls.io/github/jt274/ogg_caf_converter?branch=main'>
+        <img src='https://coveralls.io/repos/github/jt274/ogg_caf_converter/badge.svg?branch=dev' alt='Coverage Status' />
+    </a>
+    <a href="https://www.paypal.com/ncp/payment/HFAXZ7CTFQC6L">
+        <img src="https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal" alt="Donate" />
+    </a>
+</p>
+
 Convert OPUS audio files between OGG (standard) and CAF (Apple) container formats using pure dart.
 
 OPUS is a modern, leading audio codec that is widely used for audio streaming and storage due to its
-small file size at a high quality. However, Apple does not conform to the standard OGG container 
+smaller file size without loss of quality. However, Apple does not conform to the standard OGG container 
 spec for OPUS files, so it is difficult to use the OPUS codec when building cross-platform apps in
-Flutter/Dart.
+Flutter/Dart. For example, iOS devices cannot play OPUS audio files in OGG format, and Android devices
+cannot play OPUS audio files in CAF format.
 
 This package provides a simple way to convert OPUS audio files between OGG and CAF container formats
 (in either direction) using pure dart, without any external libraries or encoders.
 
 Conversion is fast since the audio itself is not being re-encoded, but simply repackaged into a 
-different container format. This means that the audio quality is not affected by the conversion.
+different container format. This means that the audio quality is not affected by the conversion, and
+speed is primarily limited by the file system I/O speed.
 
 ## Features
 - Converts OPUS audio files from OGG (standard spec) to CAF (Apple) container format.
@@ -18,9 +33,9 @@ different container format. This means that the audio quality is not affected by
 
 ## Platform Support
 
-| Android | iOS | MacOS | Web | Linux | Windows |
-| :-----: | :-: | :---: | :-: | :---: | :-----: |
-|   ✅    | ✅  |  ❓   | ❓  |  ❓   |   ❓    |
+| Android | iOS | Web | Windows | Linux | MacOS |
+| :-----: | :-: |:---:|:-------:| :---: |:-----:|
+|   ✅    | ✅  |  ❓  |    ❓    |  ❓   |   ❓   |
 
 Testing on unknown platforms is welcome! Please file a GitHub issue if you determine how the 
 package functions on another platform.
