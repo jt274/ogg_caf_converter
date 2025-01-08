@@ -1,5 +1,5 @@
 name: ogg_caf_converter
-version: 0.1.2
+version: 0.1.3
 description: Converts OPUS audio files between OGG and CAF container formats using pure dart.
 homepage: https://github.com/jt274/ogg_caf_converter
 repository: https://github.com/jt274/ogg_caf_converter
@@ -20,7 +20,7 @@ topics:
   - opus
 
 dependencies:
-  meta: ^1.16.0
+  meta: ^1.0.0
 
 dev_dependencies:
   flutter_lints: ^5.0.0

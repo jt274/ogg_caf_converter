@@ -1,3 +1,8 @@
+# 0.1.3
+
+* Release date: Jan 8, 2025
+* Relax `meta` version constraint.
+
 # 0.1.2
 
 * Release date: Jan 7, 2025
