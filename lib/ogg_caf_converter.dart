@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'models/caf_models.dart';
@@ -11,7 +12,13 @@ class OggCafConverter {
   /// Converts OPUS audio data from OGG to CAF container format and saves it to the specified output path.
   ///
   /// [inputFile] is the path to the OPUS audio file in OGG container to be converted.
+  /// Must have read access to this file path.
+  ///
   /// [outputPath] is the path where the resulting OPUS audio file in CAF container will be saved.
+  /// Must have write access to this file path.
+  ///
+  /// [deleteInput] specifies whether the input file should be deleted after conversion.
+  /// Must have write access to the input file path.
   Future<void> convertOggToCaf({
     required String input,
     required String output,
@@ -26,6 +33,30 @@ class OggCafConverter {
 
   Future<void> _convertOggToCaf(
       String inputFile, String outputPath, bool deleteInput) async {
+    final Uint8List encodedData = await _readOggToCafMemory(inputFile);
+
+    try {
+      final File file = File(outputPath);
+
+      if (!file.existsSync()) {
+        await file.create();
+      }
+
+      // Write CAF file to output path
+      await file.writeAsBytes(encodedData);
+
+      if (deleteInput) {
+        await File(inputFile).delete();
+      }
+    } catch (e, stackTrace) {
+      log('Error converting OGG to CAF: $e');
+      log(stackTrace.toString());
+
+      throw Exception(e);
+    }
+  }
+
+  Future<Uint8List> _readOggToCafMemory(String inputFile) async {
     late final OggReader ogg;
     try {
       ogg = OggReader(inputFile);
@@ -41,30 +72,28 @@ class OggCafConverter {
         trailingData: opusData.trailingData,
         frameSize: opusData.frameSize,
       );
-      final Uint8List encodedData = cf.encode();
 
-      final File file = File(outputPath);
-
-      if (!file.existsSync()) {
-        await file.create();
-      }
-
-      // Write CAF file to output path
-      await file.writeAsBytes(encodedData);
-
-      // Close input file
-      await ogg.close();
-
-      if (deleteInput) {
-        await File(inputFile).delete();
-      }
+      return cf.encode();
     } catch (e, stackTrace) {
       log('Error converting OGG to CAF: $e');
       log(stackTrace.toString());
 
+      throw Exception(e);
+    } finally {
       // Close input file
       await ogg.close();
+    }
+  }
 
+  /// Converts OPUS audio data from OGG to CAF container format and returns the bytes in memory as a Uint8List.
+  ///
+  /// [inputFile] is the path to the OPUS audio file in OGG container to be converted.
+  Future<Uint8List> convertOggToCafInMemory({
+    required String input,
+  }) async {
+    try {
+      return await _readOggToCafMemory(input);
+    } catch (e) {
       throw Exception(e);
     }
   }
@@ -72,7 +101,13 @@ class OggCafConverter {
   /// Converts OPUS audio data from CAF to OGG container format and saves it to the specified output path.
   ///
   /// [inputFile] is the path to the OPUS audio file in CAF container to be converted.
+  /// Must have read access to this file path.
+  ///
   /// [outputPath] is the path where the resulting OPUS audio file in OGG container will be saved.
+  /// Must have write access to this file path.
+  ///
+  /// [deleteInput] specifies whether the input file should be deleted after conversion.
+  /// Must have write access to the input file path.
   Future<void> convertCafToOgg({
     required String input,
     required String output,
@@ -88,28 +123,7 @@ class OggCafConverter {
   Future<void> _convertCafToOgg(
       String inputFile, String outputPath, bool deleteInput) async {
     try {
-      final CafReader caf = CafReader(inputFile);
-      final Uint8List bytes = await File(inputFile).readAsBytes();
-      final List<int> audioData = caf.readAudioData(bytes);
-      final PacketTable packetTable = caf.readPacketTable(bytes);
-      final AudioFormat audioFormat = caf.readAudioFormat(bytes);
-
-      // Log lengths for debugging
-      log('Audio data length: ${audioData.length}');
-      log('Packet table length: ${packetTable.entries.length}');
-
-      final OggFile ogg = buildOggFile(
-        audioData: audioData,
-        packetTable: packetTable.entries,
-        channels: audioFormat.channelsPerPacket,
-        preSkip: audioFormat.framesPerPacket,
-        sampleRate: audioFormat.sampleRate.toInt(),
-        //version: audioFormat.formatID.value == 'opus' ? 1 : 0,  // Example logic to set version
-        version: 1,
-        frameSize: audioFormat.framesPerPacket,
-        repackage: false,
-      );
-      final List<int> encodedData = ogg.encode();
+      final Uint8List encodedData = await _convertCafToOggInMemory(inputFile);
 
       final File file = File(outputPath);
 
@@ -130,10 +144,54 @@ class OggCafConverter {
     }
   }
 
+  Future<Uint8List> _convertCafToOggInMemory(String inputFile) async {
+    try {
+      final CafReader caf = CafReader(inputFile);
+      final Uint8List bytes = await File(inputFile).readAsBytes();
+      final Uint8List audioData = caf.readAudioData(bytes);
+      final PacketTable packetTable = caf.readPacketTable(bytes);
+      final AudioFormat audioFormat = caf.readAudioFormat(bytes);
+
+      // Log lengths for debugging
+      log('Audio data length: ${audioData.length}');
+      log('Packet table length: ${packetTable.entries.length}');
+
+      final OggFile ogg = buildOggFile(
+        audioData: audioData,
+        packetTable: packetTable.entries,
+        channels: audioFormat.channelsPerPacket,
+        preSkip: audioFormat.framesPerPacket,
+        sampleRate: audioFormat.sampleRate.toInt(),
+        version: 1,
+        frameSize: audioFormat.framesPerPacket,
+        repackage: false,
+      );
+
+      return ogg.encode();
+    } catch (e, stackTrace) {
+      log('Error converting CAF to OGG: $e');
+      log(stackTrace.toString());
+      throw Exception(e);
+    }
+  }
+
+  /// Converts OPUS audio data from CAF to OGG container format and returns the bytes in memory as a Uint8List.
+  ///
+  /// [inputFile] is the path to the OPUS audio file in CAF container to be converted.
+  Future<Uint8List> convertCafToOggInMemory({
+    required String input,
+  }) async {
+    try {
+      return await _convertCafToOggInMemory(input);
+    } catch (e) {
+      throw Exception(e);
+    }
+  }
+
   /// Builds an OGG file from provided data.
   OggFile buildOggFile({
-    required List<int> audioData,
-    required List<int> packetTable,
+    required Uint8List audioData,
+    required Uint8List packetTable,
     required int channels,
     required int preSkip,
     required int sampleRate,
@@ -150,11 +208,11 @@ class OggCafConverter {
     int headerType = 0x02; // Begin of stream
 
     // Helper function to create a page header
-    List<int> createPageHeader({
+    Uint8List createPageHeader({
       required int granulePosition,
       required int serialNumber,
       required int pageSequenceNumber,
-      required List<int> segments,
+      required Uint8List segments,
       required int headerType,
     }) {
       final List<int> header = <int>[];
@@ -167,13 +225,12 @@ class OggCafConverter {
       header.addAll(_encodeUint32(0)); // Placeholder for checksum
       header.add(segments.length); // Number of segments
       header.addAll(segments); // Segment table
-      //log('PAGE HEADER: $header');
-      return header;
+      return Uint8List.fromList(header);
     }
 
     // Helper function to calculate the checksum
-    int calculateChecksum(List<int> header, List<int> body) {
-      final List<int> page = header + body;
+    int calculateChecksum(Uint8List header, Uint8List body) {
+      final Uint8List page = Uint8List.fromList(header + body);
       int crc = 0;
       for (final int byte in page) {
         crc = (crc << 8) ^ _crcLookupTable[((crc >> 24) & 0xFF) ^ byte];
@@ -182,7 +239,7 @@ class OggCafConverter {
     }
 
     // Create OPUS Head Packet
-    List<int> createOpusHeadPacket() {
+    Uint8List createOpusHeadPacket() {
       final List<int> packet = <int>[];
       packet.addAll(utf8.encode('OpusHead')); // Signature
       packet.add(1); // Version
@@ -191,115 +248,134 @@ class OggCafConverter {
       packet.addAll(_encodeUint32(sampleRate)); // Sample rate
       packet.addAll(_encodeUint16(0)); // Output gain
       packet.add(0); // Channel mapping family
-      return packet;
+      return Uint8List.fromList(packet);
     }
 
     // Create OPUS Tags Packet
-    List<int> createOpusTagsPacket() {
+    Uint8List createOpusTagsPacket() {
       final List<int> packet = <int>[];
       packet.addAll(utf8.encode('OpusTags')); // Signature
       packet.addAll(_encodeUint32(
-          utf8.encode('Friend Time').length)); // Vendor string length
-      packet.addAll(utf8.encode('Friend Time')); // Vendor string
+          utf8.encode('Revival Apps').length)); // Vendor string length
+      packet.addAll(utf8.encode('Revival Apps')); // Vendor string
       packet.addAll(_encodeUint32(0)); // User comment list length
-      return packet;
+      return Uint8List.fromList(packet);
     }
 
-    // Split audio data into packets
-    final List<List<int>> packets = <List<int>>[];
+    // Split audio data into packets using the packetTable
+    final List<Uint8List> packets = <Uint8List>[];
     int packetIndex = 0;
     for (final int packetSize in packetTable) {
       packets.add(audioData.sublist(packetIndex, packetIndex + packetSize));
       packetIndex += packetSize;
     }
 
-    // Insert OPUS headers as the first two pages
-    final List<int> opusHeadPacket = createOpusHeadPacket();
-    List<int> header = createPageHeader(
+    // Insert OPUS Head as the first page
+    final Uint8List opusHeadPacket = createOpusHeadPacket();
+    Uint8List header = createPageHeader(
       granulePosition: 0,
       serialNumber: serialNumber,
       pageSequenceNumber: pageSequenceNumber,
-      segments: <int>[opusHeadPacket.length],
-      headerType: 0x02,
+      segments: Uint8List.fromList(<int>[opusHeadPacket.length]),
+      headerType: 0x02, // Begin of stream
     );
     int crc = calculateChecksum(header, opusHeadPacket);
-    header.setRange(22, 26, _encodeUint32(crc)); // Insert checksum
+    header.setRange(22, 26, _encodeUint32(crc));
     oggFile.pages.add(OggPage(header: header, body: opusHeadPacket));
     pageSequenceNumber++;
 
-    final List<int> opusTagsPacket = createOpusTagsPacket();
+    // Insert OPUS Tags as the second page
+    final Uint8List opusTagsPacket = createOpusTagsPacket();
     header = createPageHeader(
       granulePosition: 0,
       serialNumber: serialNumber,
       pageSequenceNumber: pageSequenceNumber,
-      segments: <int>[opusTagsPacket.length],
-      headerType: 0x00, // No continuation
+      segments: Uint8List.fromList(<int>[opusTagsPacket.length]),
+      headerType: 0x00, // Normal page, no continuation
     );
     crc = calculateChecksum(header, opusTagsPacket);
-    header.setRange(22, 26, _encodeUint32(crc)); // Insert checksum
+    header.setRange(22, 26, _encodeUint32(crc));
     oggFile.pages.add(OggPage(header: header, body: opusTagsPacket));
     pageSequenceNumber++;
 
-    // Create pages from packets
+    // Create pages from the audio packets
+    // Ogg segments must be <= 255 bytes each
+    const int maxOggSegmentSize = 255;
     List<int> currentSegment = <int>[];
     List<int> currentSegmentsTable = <int>[];
-    headerType = 0x01; // Continuation of packets
+    headerType = 0x01; // continuation flag set for the first audio page
 
-    for (final List<int> packet in packets) {
+    for (final Uint8List packet in packets) {
       final int packetSize = packet.length;
-      final int segmentCount = (packetSize / 2000).ceil();
+      final int segmentCount =
+          (packetSize + maxOggSegmentSize - 1) ~/ maxOggSegmentSize;
+
       for (int i = 0; i < segmentCount; i++) {
-        final int segmentSize =
-            (i == segmentCount - 1) ? packetSize % 2000 : 2000;
-        if (currentSegment.length + segmentSize > 2000) {
-          log('PAGE FLUSH');
-          // Flush the current page
+        final int start = i * maxOggSegmentSize;
+        final int end = min(start + maxOggSegmentSize, packetSize);
+        final int segmentSize = end - start;
+
+        // If adding this segment would exceed 255 segments on the current page,
+        // or the total segment data would exceed the page limit, flush the page.
+        // (Optional boundary check — you may handle partial flush if needed.)
+        if (currentSegmentsTable.length == 255 ||
+            currentSegment.length + segmentSize > 65025) {
+          // Create and finalize the current page
           header = createPageHeader(
             granulePosition: granulePosition,
             serialNumber: serialNumber,
             pageSequenceNumber: pageSequenceNumber,
-            segments: currentSegmentsTable,
-            headerType: headerType, // Continuation of packets
+            segments: Uint8List.fromList(currentSegmentsTable),
+            headerType: headerType,
           );
-          crc = calculateChecksum(header, currentSegment);
-          header.setRange(22, 26, _encodeUint32(crc)); // Insert checksum
-          oggFile.pages.add(OggPage(header: header, body: currentSegment));
+          crc = calculateChecksum(header, Uint8List.fromList(currentSegment));
+          header.setRange(22, 26, _encodeUint32(crc));
+          oggFile.pages.add(OggPage(
+              header: header, body: Uint8List.fromList(currentSegment)));
           pageSequenceNumber++;
+
+          // Reset for the next page
           currentSegment = <int>[];
           currentSegmentsTable = <int>[];
-          headerType = 0x00; // Continuation of packets
+          // After the first audio page, normal pages won't have the "fresh" (0x02) bit
+          headerType = 0x00;
         }
-        currentSegment.addAll(packet.sublist(i * 2000, i * 2000 + segmentSize));
+
+        // Append this segment of data
+        currentSegment.addAll(packet.sublist(start, end));
         currentSegmentsTable.add(segmentSize);
       }
 
-      // Correctly increment the granule position
+      // Update granule position (this is a simplistic approach)
       if (repackage) {
         granulePosition += frameSize;
       } else {
+        // For example, if sampleRate=48000, frameSize is typically the number
+        // of samples in an Opus frame at 48 kHz, so we scale if needed.
         granulePosition += frameSize * (48000 ~/ sampleRate);
       }
     }
 
-    // Add the remaining data as the last page
+    // Flush the last page (end of stream)
     if (currentSegment.isNotEmpty) {
       header = createPageHeader(
         granulePosition: granulePosition,
         serialNumber: serialNumber,
         pageSequenceNumber: pageSequenceNumber,
-        segments: currentSegmentsTable,
+        segments: Uint8List.fromList(currentSegmentsTable),
         headerType: 0x04, // End of stream
       );
-      crc = calculateChecksum(header, currentSegment);
-      header.setRange(22, 26, _encodeUint32(crc)); // Insert checksum
-      oggFile.pages.add(OggPage(header: header, body: currentSegment));
+      crc = calculateChecksum(header, Uint8List.fromList(currentSegment));
+      header.setRange(22, 26, _encodeUint32(crc));
+      oggFile.pages.add(
+          OggPage(header: header, body: Uint8List.fromList(currentSegment)));
     }
 
     return oggFile;
   }
 
-  List<int> _encodeUint64(int value) {
-    return <int>[
+  Uint8List _encodeUint64(int value) {
+    return Uint8List.fromList(<int>[
       value & 0xFF,
       (value >> 8) & 0xFF,
       (value >> 16) & 0xFF,
@@ -308,26 +384,27 @@ class OggCafConverter {
       (value >> 40) & 0xFF,
       (value >> 48) & 0xFF,
       (value >> 56) & 0xFF,
-    ];
+    ]);
   }
 
-  List<int> _encodeUint32(int value) {
-    return <int>[
+  Uint8List _encodeUint32(int value) {
+    return Uint8List.fromList(<int>[
       value & 0xFF,
       (value >> 8) & 0xFF,
       (value >> 16) & 0xFF,
       (value >> 24) & 0xFF,
-    ];
+    ]);
   }
 
-  List<int> _encodeUint16(int value) {
-    return <int>[
+  Uint8List _encodeUint16(int value) {
+    return Uint8List.fromList(<int>[
       value & 0xFF,
       (value >> 8) & 0xFF,
-    ];
+    ]);
   }
 
-  final List<int> _crcLookupTable = List<int>.generate(256, (int i) {
+  final Uint8List _crcLookupTable =
+      Uint8List.fromList(List<int>.generate(256, (int i) {
     int r = i << 24;
     for (int j = 0; j < 8; j++) {
       if (r & 0x80000000 != 0) {
@@ -337,10 +414,10 @@ class OggCafConverter {
       }
     }
     return r;
-  });
+  }));
 
   /// Calculates the length of the packet table based on trailing data.
-  int _calculatePacketTableLength(List<int> trailingData) {
+  int _calculatePacketTableLength(Uint8List trailingData) {
     int packetTableLength = 24;
 
     for (final int value in trailingData) {
@@ -364,8 +441,8 @@ class OggCafConverter {
   /// Builds a CAF file from provided data.
   CafFile _buildCafFile({
     required OggHeader header,
-    required List<int> audioData,
-    required List<int> trailingData,
+    required Uint8List audioData,
+    required Uint8List trailingData,
     required int frameSize,
   }) {
     final int lenAudio = audioData.length;
@@ -462,7 +539,7 @@ class CafReader {
   final String filePath;
 
   /// Reads the audio data from the CAF file.
-  List<int> readAudioData(Uint8List bytes) {
+  Uint8List readAudioData(Uint8List bytes) {
     int offset = 0;
 
     // Read the CAF file header
@@ -635,12 +712,19 @@ class OggFile {
   List<OggPage> pages;
 
   /// Encodes the OGG file to a list of bytes.
-  List<int> encode() {
-    final List<int> fileData = <int>[];
+  Uint8List encode() {
+    final int totalLength = pages.fold(0,
+        (int sum, OggPage page) => sum + page.header.length + page.body.length);
+    final Uint8List fileData = Uint8List(totalLength);
+    int offset = 0;
+
     for (final OggPage page in pages) {
-      fileData.addAll(page.header);
-      fileData.addAll(page.body);
+      fileData.setRange(offset, offset + page.header.length, page.header);
+      offset += page.header.length;
+      fileData.setRange(offset, offset + page.body.length, page.body);
+      offset += page.body.length;
     }
+
     return fileData;
   }
 }
@@ -650,8 +734,8 @@ class OggPage {
   OggPage({required this.header, required this.body});
 
   /// The header of the OGG page.
-  List<int> header;
+  Uint8List header;
 
   /// The body of the OGG page.
-  List<int> body;
+  Uint8List body;
 }

@@ -59,9 +59,14 @@ To convert an OPUS audio file from an Apple CAF container format to a standard O
 use the `convertCafToOgg()` method.
 
 Both functions take the same input parameters:
-- `input`: The path to the input file.
+- `input`: The path to the input file (must have read access to this file path).
 - `output`: The path to the output file (must have write access to this file path).
-- `deleteInput`: Whether to delete the input file after successful conversion. Defaults to `false`.
+- `deleteInput`: Whether to delete the input file after successful conversion (must have write 
+access to the input file path). Defaults to `false`.
+
+For in-memory conversion without creating a new file, use the `convertOggToCafInMemory()` and 
+`convertCafToOggInMemory()` methods. These functions return a `Uint8List` of the converted audio 
+file bytes. Both functions take an `input` parameter of the input file path.
 
 ## Example
 
@@ -69,6 +74,8 @@ Make sure to place the function call inside of a try-catch block to handle any e
 the function call to ensure the conversion is complete before continuing.
 
 ```dart
+import 'dart:typed_data';
+
 import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 
 const String inputFilePath = 'path/to/input/file.opus'; // Input file location
@@ -93,6 +100,24 @@ void main() async {
       input: inputFilePath,
       output: outputFilePath,
       deleteInput: true,
+    );
+  } catch (e) {
+    // Handle error
+  }
+
+  // Convert from OGG to CAF in memory
+  try {
+    final Uint8List bytes = await OggCafConverter().convertOggToCafInMemory(
+      input: inputFilePath,
+    );
+  } catch (e) {
+    // Handle error
+  }
+
+  // Convert from CAF to OGG in memory
+  try {
+    final Uint8List bytes = await OggCafConverter().convertCafToOggInMemory(
+      input: inputFilePath,
     );
   } catch (e) {
     // Handle error

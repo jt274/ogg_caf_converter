@@ -1,3 +1,13 @@
+# 0.1.4
+
+* Release date: Jan 10, 2025
+* Added `convertCafToOggInMemory` and `convertOggToCafInMemory` methods to return converted file bytes in memory without creating a new file.
+* Fixed CAF test resource file.
+* Increased conversion efficiency.
+* Rewrote OGG file encoding.
+* Documentation update.
+* Restructured and added tests.
+
 # 0.1.3
 
 * Release date: Jan 8, 2025

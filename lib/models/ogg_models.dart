@@ -32,7 +32,7 @@ class OggPageResult {
   OggPageResult({required this.segments, this.pageHeader, this.error});
 
   /// List of segments in the Ogg page.
-  final List<List<int>> segments;
+  final List<Uint8List> segments;
 
   /// Header of the Ogg page.
   final OggPageHeader? pageHeader;
@@ -49,10 +49,10 @@ class OpusData {
       required this.frameSize});
 
   /// List of audio data bytes.
-  final List<int> audioData;
+  final Uint8List audioData;
 
   /// List of trailing data bytes.
-  final List<int> trailingData;
+  final Uint8List trailingData;
 
   /// Size of the audio frame.
   final int frameSize;
@@ -105,7 +105,7 @@ class OggPageHeader {
   late int granulePosition;
 
   /// Signature.
-  late List<int> sig;
+  late Uint8List sig;
 
   /// Version.
   late int version;
@@ -145,7 +145,7 @@ class OggReader {
   /// Throws an exception if an error occurs while reading the headers.
   Future<OggHeader> readHeaders() async {
     final OggPageResult result = await parseNextPage();
-    final List<List<int>> segments = result.segments;
+    final List<Uint8List> segments = result.segments;
     final OggPageHeader? pageHeader = result.pageHeader;
     final OggReaderError? err = result.error;
 
@@ -206,7 +206,7 @@ class OggReader {
 
     while (true) {
       final OggPageResult result = await parseNextPage();
-      final List<List<int>> segments = result.segments;
+      final List<Uint8List> segments = result.segments;
       final OggPageHeader? header = result.pageHeader;
       final OggReaderError? err = result.error;
 
@@ -223,13 +223,13 @@ class OggReader {
         continue;
       }
 
-      for (final List<int> segment in segments) {
+      for (final Uint8List segment in segments) {
         trailingData.add(segment.length);
         audioData.addAll(segment);
       }
 
       if (header?.index == 2) {
-        final List<int> tmpPacket = segments[0];
+        final Uint8List tmpPacket = segments[0];
         if (tmpPacket.isNotEmpty) {
           final int tmptoc = tmpPacket[0] & 255;
           final int tocConfig = tmptoc >> 3;
@@ -250,7 +250,9 @@ class OggReader {
     }
 
     return OpusData(
-        audioData: audioData, trailingData: trailingData, frameSize: frameSize);
+        audioData: Uint8List.fromList(audioData),
+        trailingData: Uint8List.fromList(trailingData),
+        frameSize: frameSize);
   }
 
   /// Parses the next page in the Ogg file.
@@ -261,12 +263,12 @@ class OggReader {
     final int bytesRead = await raFile?.readInto(h) ?? 0;
     if (bytesRead < pageHeaderLen) {
       return OggPageResult(
-          segments: <List<int>>[], error: OggReaderError.shortPageHeader);
+          segments: <Uint8List>[], error: OggReaderError.shortPageHeader);
     }
 
     final OggPageHeader pageHeader = OggPageHeader(
       granulePosition: 0,
-      sig: <int>[],
+      sig: Uint8List(0),
       version: 0,
       headerType: 0,
       serial: 0,

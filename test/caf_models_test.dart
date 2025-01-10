@@ -117,7 +117,7 @@ void main() {
           primingFrames: 3,
           remainderFrames: 4,
         ),
-        entries: <int>[5, 6, 7],
+        entries: Uint8List.fromList(<int>[5, 6, 7]),
       );
       final Uint8List encoded = packetTable.encode();
       expect(ByteData.sublistView(encoded).getInt64(0), equals(1));

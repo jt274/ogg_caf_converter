@@ -262,15 +262,15 @@ class PacketTable {
   final PacketTableHeader header;
 
   /// The list of entries in the packet table.
-  final List<int> entries;
+  final Uint8List entries;
 
   /// Encodes the packet table to a Uint8List.
   Uint8List encode() {
-    final List<List<int>> encodedVarintEntriesChunks =
+    final List<Uint8List> encodedVarintEntriesChunks =
         entries.map((int entry) => encodeVarint(entry)).toList();
 
     int totalLength = 24;
-    for (final List<int> encodedChunk in encodedVarintEntriesChunks) {
+    for (final Uint8List encodedChunk in encodedVarintEntriesChunks) {
       totalLength += encodedChunk.length;
     }
 
@@ -281,7 +281,7 @@ class PacketTable {
     data.setInt32(20, header.remainderFrames);
 
     int offset = 24;
-    for (final List<int> entry in encodedVarintEntriesChunks) {
+    for (final Uint8List entry in encodedVarintEntriesChunks) {
       for (int i = 0; i < entry.length; i++) {
         data.setUint8(offset + i, entry[i]);
       }
@@ -291,23 +291,23 @@ class PacketTable {
   }
 
   /// Encodes an integer to `data` using variable-length encoding technique (varint) format.
-  List<int> encodeVarint(int value) {
-    final List<int> byts = <int>[];
+  Uint8List encodeVarint(int value) {
+    final List<int> bytes = <int>[];
     int cur = value;
     while (cur != 0) {
-      byts.add(cur & 127);
+      bytes.add(cur & 127);
       cur >>= 7;
     }
 
-    int i = byts.length - 1;
+    int i = bytes.length - 1;
     if (i == 0) {
-      return byts;
+      return Uint8List.fromList(bytes);
     }
 
     final List<int> modifiedBytes = <int>[];
 
     while (i >= 0) {
-      int val = byts[i];
+      int val = bytes[i];
       if (i > 0) {
         val = val | 0x80;
       }
@@ -315,7 +315,7 @@ class PacketTable {
       i--;
     }
 
-    return modifiedBytes;
+    return Uint8List.fromList(modifiedBytes);
   }
 }
 
@@ -369,7 +369,7 @@ class AudioData {
   final int editCount;
 
   /// The list of audio data bytes.
-  final List<int> data;
+  final Uint8List data;
 
   /// Encodes the audio data to a Uint8List.
   Uint8List encode() {
