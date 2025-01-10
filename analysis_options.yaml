@@ -249,5 +249,9 @@ linter:
     - valid_regexps
     - void_checks
 
+analyzer:
+  exclude:
+    - example/**
+
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
