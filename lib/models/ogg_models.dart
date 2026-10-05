@@ -33,14 +33,11 @@ int getOpusPacketSampleCount(Uint8List packet) {
   int framesPerPacket = 0;
   switch (frameCountCode) {
     case 0:
-      // Single frame (code 0 = 1 frame)
       framesPerPacket = 1;
     case 1:
     case 2:
-      // Two frames: code 1/2 = 2 frames (same or different size)
       framesPerPacket = 2;
     case 3:
-      // Variable frame count: actual count stored in next byte (bits 0-5)
       if (packet.length < 2) {
         throw Exception('Malformed Opus packet with code 3 and no frame count');
       }
@@ -52,16 +49,12 @@ int getOpusPacketSampleCount(Uint8List packet) {
       throw Exception('Malformed Opus packet with invalid frame count code');
   }
 
-  // Sample rate is determined by Opus config bits (config >> 3)
   late final int samplesPerFrame;
   if (config >= 16) {
-    // CELT-only mode (high bitrate, 15-60 ms frames)
     samplesPerFrame = <int>[120, 240, 480, 960][config & 0x03];
   } else if (config >= 12) {
-    // Hybrid mode (8-20 kHz input bandwidth)
     samplesPerFrame = <int>[480, 960][config & 0x01];
   } else {
-    // SILK mode (narrowband-fullband, 10-60 ms frames)
     samplesPerFrame = <int>[480, 960, 1920, 2880][config & 0x03];
   }
 

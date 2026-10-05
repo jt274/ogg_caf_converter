@@ -394,8 +394,6 @@ class OggCafConverter {
     required int frameCount,
     required int sampleRate,
   }) {
-    // Opus granule positions and trim values are always counted at 48 kHz
-    // (RFC 7845 §3.2). Scale frame counts from the input sample rate to 48 kHz.
     if (sampleRate <= 0 || 48000 % sampleRate != 0) {
       throw Exception('Unsupported Opus sample rate: $sampleRate');
     }
