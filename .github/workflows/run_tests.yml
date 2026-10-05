@@ -50,6 +50,10 @@ jobs:
       - id: install
         name: Install dependencies
         run: dart pub get
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Run VM tests
         run: dart test --platform vm
         if: always() && steps.install.outcome == 'success'
