@@ -6,19 +6,28 @@ import 'package:meta/meta.dart';
 @immutable
 class FourByteString {
   /// Creates a FourByteString from a given string.
-  /// If the string length is not 4, it defaults to [0, 0, 0, 0].
-  FourByteString(String string)
-      : bytes = (string.length == 4) ? utf8.encode(string) : <int>[0, 0, 0, 0];
+  /// If it does not have four Dart string code units and encode to exactly
+  /// four UTF-8 bytes, it defaults to [0, 0, 0, 0].
+  FourByteString(String string) : bytes = _encodeFourByteString(string);
 
   /// The bytes representing the four-byte string.
   final List<int> bytes;
+
+  static List<int> _encodeFourByteString(String string) {
+    if (string.length != 4) {
+      return <int>[0, 0, 0, 0];
+    }
+
+    final List<int> encoded = utf8.encode(string);
+    return encoded.length == 4 ? encoded : <int>[0, 0, 0, 0];
+  }
 
   @override
   bool operator ==(Object other) =>
       other is FourByteString && bytes.toString() == other.bytes.toString();
 
   @override
-  int get hashCode => bytes.hashCode;
+  int get hashCode => Object.hashAll(bytes);
 
   /// Encodes the four-byte string to a Uint8List.
   Uint8List encode() {
