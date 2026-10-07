@@ -256,18 +256,41 @@ class CAFStringsChunk {
 
 /// A class representing a packet table in a CAF file.
 class PacketTable {
-  PacketTable({required this.header, required this.entries});
+  PacketTable({
+    required this.header,
+    required this.entries,
+    this.frameEntries = const <int>[],
+  });
 
   /// The header of the packet table.
   final PacketTableHeader header;
 
-  /// The list of entries in the packet table.
+  /// The packet-size entries in the packet table.
   final List<int> entries;
+
+  /// The per-packet frame-count entries in the packet table.
+  final List<int> frameEntries;
 
   /// Encodes the packet table to a Uint8List.
   Uint8List encode() {
-    final List<Uint8List> encodedVarintEntriesChunks =
-        entries.map((int entry) => encodeVarint(entry)).toList();
+    final int packetCount = header.numberPackets;
+    if (entries.isNotEmpty && entries.length != packetCount) {
+      throw ArgumentError('Packet table entries must match numberPackets');
+    }
+    if (frameEntries.isNotEmpty && frameEntries.length != packetCount) {
+      throw ArgumentError(
+          'Packet table frame entries must match numberPackets');
+    }
+
+    final List<Uint8List> encodedVarintEntriesChunks = <Uint8List>[];
+    for (int i = 0; i < packetCount; i++) {
+      if (entries.isNotEmpty) {
+        encodedVarintEntriesChunks.add(encodeVarint(entries[i]));
+      }
+      if (frameEntries.isNotEmpty) {
+        encodedVarintEntriesChunks.add(encodeVarint(frameEntries[i]));
+      }
+    }
 
     int totalLength = 24;
     for (final Uint8List encodedChunk in encodedVarintEntriesChunks) {

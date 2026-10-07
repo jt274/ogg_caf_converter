@@ -16,6 +16,7 @@ void main() {
       final OpusData opusData = await reader.readOpusData();
       expect(opusData.audioData, isNotEmpty);
       expect(opusData.frameSize, isNotNull);
+      expect(opusData.packetSampleCounts, isNotEmpty);
       await reader.close();
     });
 

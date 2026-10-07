@@ -112,7 +112,7 @@ void main() {
     test('encodes PacketTable correctly', () {
       final PacketTable packetTable = PacketTable(
         header: PacketTableHeader(
-          numberPackets: 1,
+          numberPackets: 3,
           numberValidFrames: 2,
           primingFrames: 3,
           remainderFrames: 4,
@@ -120,7 +120,7 @@ void main() {
         entries: <int>[5, 6, 7],
       );
       final Uint8List encoded = packetTable.encode();
-      expect(ByteData.sublistView(encoded).getInt64(0), equals(1));
+      expect(ByteData.sublistView(encoded).getInt64(0), equals(3));
       expect(ByteData.sublistView(encoded).getInt64(8), equals(2));
       expect(ByteData.sublistView(encoded).getInt32(16), equals(3));
       expect(ByteData.sublistView(encoded).getInt32(20), equals(4));
@@ -139,6 +139,37 @@ void main() {
       );
       final Uint8List encoded = packetTable.encode();
       expect(encoded.sublist(24), equals(<int>[5, 129, 0, 130, 44]));
+    });
+
+    test('encodes packet size and frame-count pairs as varints', () {
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 2,
+          numberValidFrames: 1440,
+          primingFrames: 0,
+          remainderFrames: 0,
+        ),
+        entries: <int>[5, 128],
+        frameEntries: <int>[480, 960],
+      );
+      final Uint8List encoded = packetTable.encode();
+      expect(encoded.sublist(24), equals(<int>[5, 131, 96, 129, 0, 135, 64]));
+    });
+
+    test('encodes large packet size and frame-count pairs as varints', () {
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 2,
+          numberValidFrames: 17344,
+          primingFrames: 0,
+          remainderFrames: 0,
+        ),
+        entries: <int>[300, 128],
+        frameEntries: <int>[16384, 960],
+      );
+      final Uint8List encoded = packetTable.encode();
+      expect(encoded.sublist(24),
+          equals(<int>[130, 44, 129, 128, 0, 129, 0, 135, 64]));
     });
   });
 

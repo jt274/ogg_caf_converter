@@ -87,13 +87,38 @@ Future<List<int>> _decodeFfmpegAudio(String ffmpegPath, String input,
   return result.stdout as List<int>;
 }
 
+Future<List<Uint8List>> _readOggAudioPackets(String path) async {
+  final OggReader reader = OggReader(path);
+  final List<Uint8List> packets = <Uint8List>[];
+  await reader.readHeaders();
+
+  while (true) {
+    final OggPageResult page = await reader.parseNextPage();
+    if (page.error != null) {
+      break;
+    }
+
+    if (page.segments.isNotEmpty &&
+        String.fromCharCodes(page.segments.first.take(8).toList()) ==
+            'OpusTags') {
+      continue;
+    }
+
+    packets.addAll(page.segments);
+  }
+
+  await reader.close();
+  return packets;
+}
+
 Future<(AudioFormat, PacketTable, Uint8List)> _readCafContents(
     String path) async {
   final CafReader reader = CafReader(path);
   final Uint8List bytes = await File(path).readAsBytes();
+  final AudioFormat audioFormat = reader.readAudioFormat(bytes);
   return (
-    reader.readAudioFormat(bytes),
-    reader.readPacketTable(bytes),
+    audioFormat,
+    reader.readPacketTable(bytes, audioFormat: audioFormat),
     reader.readAudioData(bytes),
   );
 }
@@ -142,10 +167,35 @@ Iterable<Uint8List> _iterateOggPages(Uint8List bytes) sync* {
   }
 }
 
-Uint8List _buildSyntheticOpusPacket(int length) {
+Uint8List _buildSyntheticOpusPacket(int length, {int toc = 0x80}) {
   final Uint8List packet = Uint8List(length);
-  packet[0] = 0x80;
+  packet[0] = toc;
   return packet;
+}
+
+OggFile _buildVariableDurationSyntheticOgg({
+  int preSkip = 0,
+  int remainderFrames = 0,
+}) {
+  final OggCafConverter syntheticConverter = OggCafConverter();
+  final List<Uint8List> packets = <Uint8List>[
+    _buildSyntheticOpusPacket(1, toc: 0x90),
+    _buildSyntheticOpusPacket(1, toc: 0x98),
+    _buildSyntheticOpusPacket(1, toc: 0x90),
+  ];
+  return syntheticConverter.buildOggFile(
+    audioData: Uint8List.fromList(
+      packets.expand((Uint8List packet) => packet).toList(),
+    ),
+    packetTable: packets.map((Uint8List packet) => packet.length).toList(),
+    channels: 1,
+    preSkip: preSkip,
+    sampleRate: opusFixedSampleRate,
+    version: 1,
+    frameSize: 0,
+    remainderFrames: remainderFrames,
+    repackage: false,
+  );
 }
 
 void main() {
@@ -237,6 +287,84 @@ void main() {
             equals(refTable.header.primingFrames));
         expect(libTable.header.remainderFrames,
             equals(refTable.header.remainderFrames));
+      } finally {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      }
+    });
+
+    test('writes packet frame entries for variable-duration OGG input',
+        () async {
+      final OggFile ogg = _buildVariableDurationSyntheticOgg();
+
+      final Directory tempDir =
+          await Directory.systemTemp.createTemp('ogg-caf-variable-frames-');
+      final String inputFile = '${tempDir.path}/input.ogg';
+      final String outputFile = '${tempDir.path}/output.caf';
+      final String roundTripFile = '${tempDir.path}/roundtrip.ogg';
+
+      try {
+        await File(inputFile).writeAsBytes(ogg.encode());
+
+        await oggCafConverter.convertOggToCaf(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final (AudioFormat audioFormat, PacketTable packetTable, _) =
+            await _readCafContents(outputFile);
+
+        expect(audioFormat.sampleRate, equals(48000));
+        expect(audioFormat.bytesPerPacket, equals(0));
+        expect(audioFormat.framesPerPacket, equals(0));
+        expect(packetTable.entries, equals(<int>[1, 1, 1]));
+        expect(packetTable.frameEntries, equals(<int>[480, 960, 480]));
+        expect(packetTable.header.numberValidFrames, equals(1920));
+
+        await oggCafConverter.convertCafToOgg(
+          input: outputFile,
+          output: roundTripFile,
+        );
+
+        final List<Uint8List> originalPackets =
+            await _readOggAudioPackets(inputFile);
+        final List<Uint8List> roundTripPackets =
+            await _readOggAudioPackets(roundTripFile);
+        expect(roundTripPackets, equals(originalPackets));
+      } finally {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      }
+    });
+
+    test('preserves trim metadata for variable-duration OGG input', () async {
+      final OggFile ogg = _buildVariableDurationSyntheticOgg(
+        preSkip: 120,
+        remainderFrames: 240,
+      );
+      final Directory tempDir =
+          await Directory.systemTemp.createTemp('ogg-caf-variable-trim-');
+      final String inputFile = '${tempDir.path}/input.ogg';
+      final String outputFile = '${tempDir.path}/output.caf';
+
+      try {
+        await File(inputFile).writeAsBytes(ogg.encode());
+
+        await oggCafConverter.convertOggToCaf(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final (AudioFormat audioFormat, PacketTable packetTable, _) =
+            await _readCafContents(outputFile);
+
+        expect(audioFormat.framesPerPacket, equals(0));
+        expect(packetTable.frameEntries, equals(<int>[480, 960, 480]));
+        expect(packetTable.header.primingFrames, equals(120));
+        expect(packetTable.header.remainderFrames, equals(240));
+        expect(packetTable.header.numberValidFrames, equals(1560));
       } finally {
         if (tempDir.existsSync()) {
           tempDir.deleteSync(recursive: true);
@@ -580,6 +708,172 @@ void main() {
 
       expect(decoded.header.numberPackets, equals(0));
       expect(decoded.entries, isEmpty);
+    });
+
+    test('reads packet size and frame-count pairs when frames vary', () {
+      final AudioFormat audioFormat = AudioFormat(
+        sampleRate: 48000,
+        formatID: FourByteString('opus'),
+        formatFlags: 0,
+        bytesPerPacket: 0,
+        framesPerPacket: 0,
+        channelsPerPacket: 1,
+        bitsPerChannel: 0,
+      );
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 2,
+          numberValidFrames: 1440,
+          primingFrames: 0,
+          remainderFrames: 0,
+        ),
+        entries: <int>[5, 128],
+        frameEntries: <int>[480, 960],
+      );
+      final CafFile cafFile = CafFile(
+        fileHeader: FileHeader(
+          fileType: FourByteString('caff'),
+          fileVersion: 1,
+          fileFlags: 0,
+        ),
+        chunks: <Chunk>[
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.audioDescription,
+              chunkSize: 32,
+            ),
+            contents: audioFormat,
+          ),
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.packetTable,
+              chunkSize: packetTable.encode().length,
+            ),
+            contents: packetTable,
+          ),
+        ],
+      );
+
+      final Uint8List bytes = cafFile.encode();
+      final PacketTable decoded = CafReader('unused').readPacketTable(bytes);
+
+      expect(decoded.entries, equals(packetTable.entries));
+      expect(decoded.frameEntries, equals(packetTable.frameEntries));
+    });
+
+    test('reads frame-count-only packet tables when packet sizes are constant',
+        () {
+      final AudioFormat audioFormat = AudioFormat(
+        sampleRate: 48000,
+        formatID: FourByteString('opus'),
+        formatFlags: 0,
+        bytesPerPacket: 3,
+        framesPerPacket: 0,
+        channelsPerPacket: 1,
+        bitsPerChannel: 0,
+      );
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 2,
+          numberValidFrames: 1440,
+          primingFrames: 0,
+          remainderFrames: 0,
+        ),
+        entries: const <int>[],
+        frameEntries: <int>[480, 960],
+      );
+      final CafFile cafFile = CafFile(
+        fileHeader: FileHeader(
+          fileType: FourByteString('caff'),
+          fileVersion: 1,
+          fileFlags: 0,
+        ),
+        chunks: <Chunk>[
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.audioDescription,
+              chunkSize: 32,
+            ),
+            contents: audioFormat,
+          ),
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.packetTable,
+              chunkSize: packetTable.encode().length,
+            ),
+            contents: packetTable,
+          ),
+        ],
+      );
+
+      final Uint8List bytes = cafFile.encode();
+      final PacketTable decoded = CafReader('unused').readPacketTable(bytes);
+
+      expect(decoded.entries, isEmpty);
+      expect(decoded.frameEntries, equals(packetTable.frameEntries));
+    });
+
+    test('throws for malformed packet size and frame-count pairs', () {
+      final AudioFormat audioFormat = AudioFormat(
+        sampleRate: 48000,
+        formatID: FourByteString('opus'),
+        formatFlags: 0,
+        bytesPerPacket: 0,
+        framesPerPacket: 0,
+        channelsPerPacket: 1,
+        bitsPerChannel: 0,
+      );
+      final Uint8List validPacketTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 2,
+          numberValidFrames: 1440,
+          primingFrames: 0,
+          remainderFrames: 0,
+        ),
+        entries: <int>[5, 128],
+        frameEntries: <int>[480, 960],
+      ).encode();
+      final CafFile cafFile = CafFile(
+        fileHeader: FileHeader(
+          fileType: FourByteString('caff'),
+          fileVersion: 1,
+          fileFlags: 0,
+        ),
+        chunks: <Chunk>[
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.audioDescription,
+              chunkSize: 32,
+            ),
+            contents: audioFormat,
+          ),
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.packetTable,
+              chunkSize: validPacketTable.length,
+            ),
+            contents: PacketTable(
+              header: PacketTableHeader(
+                numberPackets: 2,
+                numberValidFrames: 1440,
+                primingFrames: 0,
+                remainderFrames: 0,
+              ),
+              entries: <int>[5, 128],
+              frameEntries: <int>[480, 960],
+            ),
+          ),
+        ],
+      );
+      final Uint8List bytes = cafFile.encode();
+      final Uint8List malformedBytes = bytes.sublist(0, bytes.length - 1);
+      ByteData.sublistView(malformedBytes, 56, 64)
+          .setInt64(0, validPacketTable.length - 1);
+
+      expect(
+        () => CafReader('unused').readPacketTable(malformedBytes),
+        throwsException,
+      );
     });
   });
 }

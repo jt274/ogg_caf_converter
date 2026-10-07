@@ -33,11 +33,14 @@ int getOpusPacketSampleCount(Uint8List packet) {
   int framesPerPacket = 0;
   switch (frameCountCode) {
     case 0:
+      // Single frame (code 0 = 1 frame)
       framesPerPacket = 1;
     case 1:
     case 2:
+      // Two frames: code 1/2 = 2 frames (same or different size)
       framesPerPacket = 2;
     case 3:
+      // Variable frame count: actual count stored in next byte (bits 0-5)
       if (packet.length < 2) {
         throw Exception('Malformed Opus packet with code 3 and no frame count');
       }
@@ -49,12 +52,16 @@ int getOpusPacketSampleCount(Uint8List packet) {
       throw Exception('Malformed Opus packet with invalid frame count code');
   }
 
+  // Sample rate is determined by Opus config bits (config >> 3)
   late final int samplesPerFrame;
   if (config >= 16) {
+    // CELT-only mode (high bitrate, 15-60 ms frames)
     samplesPerFrame = <int>[120, 240, 480, 960][config & 0x03];
   } else if (config >= 12) {
+    // Hybrid mode (8-20 kHz input bandwidth)
     samplesPerFrame = <int>[480, 960][config & 0x01];
   } else {
+    // SILK mode (narrowband-fullband, 10-60 ms frames)
     samplesPerFrame = <int>[480, 960, 1920, 2880][config & 0x03];
   }
 
@@ -90,6 +97,7 @@ class OpusData {
   OpusData(
       {required this.audioData,
       required this.trailingData,
+      required this.packetSampleCounts,
       required this.frameSize,
       required this.totalSamples,
       required this.finalGranulePosition});
@@ -99,6 +107,9 @@ class OpusData {
 
   /// List of trailing data bytes.
   final Uint8List trailingData;
+
+  /// The number of decoded PCM samples contributed by each packet.
+  final List<int> packetSampleCounts;
 
   /// Size of the audio frame.
   final int frameSize;
@@ -253,8 +264,8 @@ class OggReader {
   /// Throws an exception if an error occurs while reading the Opus data.
   Future<OpusData> readOpusData() async {
     final List<int> audioData = <int>[];
-    int frameSize = 0;
     final List<int> trailingData = <int>[];
+    final List<int> packetSampleCounts = <int>[];
     int totalSamples = 0;
     int finalGranulePosition = 0;
 
@@ -281,7 +292,7 @@ class OggReader {
         trailingData.add(segment.length);
         audioData.addAll(segment);
         final int packetSampleCount = getOpusPacketSampleCount(segment);
-        frameSize = frameSize == 0 ? packetSampleCount : frameSize;
+        packetSampleCounts.add(packetSampleCount);
         totalSamples += packetSampleCount;
       }
 
@@ -292,14 +303,21 @@ class OggReader {
       }
     }
 
-    if (frameSize == 0 && trailingData.isNotEmpty) {
-      frameSize = getOpusPacketSampleCount(
-          Uint8List.fromList(audioData.sublist(0, trailingData.first)));
+    int frameSize = 0;
+    if (packetSampleCounts.isNotEmpty) {
+      frameSize = packetSampleCounts.first;
+      for (final int packetSampleCount in packetSampleCounts.skip(1)) {
+        if (packetSampleCount != frameSize) {
+          frameSize = 0;
+          break;
+        }
+      }
     }
 
     return OpusData(
         audioData: Uint8List.fromList(audioData),
         trailingData: Uint8List.fromList(trailingData),
+        packetSampleCounts: packetSampleCounts,
         frameSize: frameSize,
         totalSamples: totalSamples,
         finalGranulePosition: finalGranulePosition);

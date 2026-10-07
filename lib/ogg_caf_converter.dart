@@ -68,7 +68,9 @@ class OggCafConverter {
       final CafFile cf = _buildCafFile(
         header: header,
         audioData: opusData.audioData,
-        trailingData: opusData.trailingData,
+        packetSizes: opusData.trailingData,
+        packetFrames:
+            opusData.frameSize == 0 ? opusData.packetSampleCounts : <int>[],
         frameSize: opusData.frameSize,
         validFrames: opusData.finalGranulePosition - header.preSkip,
         primingFrames: header.preSkip,
@@ -150,9 +152,10 @@ class OggCafConverter {
     try {
       final CafReader caf = CafReader(inputFile);
       final Uint8List bytes = await File(inputFile).readAsBytes();
-      final Uint8List audioData = caf.readAudioData(bytes);
-      final PacketTable packetTable = caf.readPacketTable(bytes);
       final AudioFormat audioFormat = caf.readAudioFormat(bytes);
+      final Uint8List audioData = caf.readAudioData(bytes);
+      final PacketTable packetTable =
+          caf.readPacketTable(bytes, audioFormat: audioFormat);
 
       // Log lengths for debugging
       log('Audio data length: ${audioData.length}');
@@ -394,6 +397,8 @@ class OggCafConverter {
     required int frameCount,
     required int sampleRate,
   }) {
+    // Opus granule positions and trim values are always counted at 48 kHz
+    // (RFC 7845 §3.2). Scale frame counts from the input sample rate to 48 kHz.
     if (sampleRate <= 0 || 48000 % sampleRate != 0) {
       throw Exception('Unsupported Opus sample rate: $sampleRate');
     }
@@ -443,41 +448,30 @@ class OggCafConverter {
   });
 
   /// Calculates the length of the packet table based on trailing data.
-  int _calculatePacketTableLength(Uint8List trailingData) {
-    int packetTableLength = 24;
-
-    for (final int value in trailingData) {
-      int numBytes = 0;
-      if ((value & 0x7f) == value) {
-        numBytes = 1;
-      } else if ((value & 0x3fff) == value) {
-        numBytes = 2;
-      } else if ((value & 0x1fffff) == value) {
-        numBytes = 3;
-      } else if ((value & 0x0fffffff) == value) {
-        numBytes = 4;
-      } else {
-        numBytes = 5;
-      }
-      packetTableLength += numBytes;
-    }
-    return packetTableLength;
-  }
-
   /// Builds a CAF file from provided data.
   CafFile _buildCafFile({
     required OggHeader header,
     required Uint8List audioData,
-    required Uint8List trailingData,
+    required Uint8List packetSizes,
+    required List<int> packetFrames,
     required int frameSize,
     required int validFrames,
     required int primingFrames,
     required int remainderFrames,
   }) {
     final int lenAudio = audioData.length;
-    final int packets = trailingData.length;
-
-    final int packetTableLength = _calculatePacketTableLength(trailingData);
+    final int packets = packetSizes.length;
+    final PacketTable packetTable = PacketTable(
+      header: PacketTableHeader(
+        numberPackets: packets,
+        numberValidFrames: validFrames,
+        primingFrames: primingFrames,
+        remainderFrames: remainderFrames,
+      ),
+      entries: packetSizes.toList(),
+      frameEntries: packetFrames,
+    );
+    final int packetTableLength = packetTable.encode().length;
 
     log('frameSize: $frameSize packetTableLength: $packetTableLength validFrames: $validFrames primingFrames: $primingFrames remainderFrames: $remainderFrames packets: $packets lenAudio: $lenAudio');
 
@@ -542,15 +536,7 @@ class OggCafConverter {
     final Chunk c4 = Chunk(
       header: ChunkHeader(
           chunkType: ChunkTypes.packetTable, chunkSize: packetTableLength),
-      contents: PacketTable(
-        header: PacketTableHeader(
-          numberPackets: packets,
-          numberValidFrames: validFrames,
-          primingFrames: primingFrames,
-          remainderFrames: remainderFrames,
-        ),
-        entries: trailingData,
-      ),
+      contents: packetTable,
     );
 
     cf.chunks.add(c4);
@@ -615,7 +601,7 @@ class CafReader {
   }
 
   /// Reads the packet table from the CAF file.
-  PacketTable readPacketTable(Uint8List bytes) {
+  PacketTable readPacketTable(Uint8List bytes, {AudioFormat? audioFormat}) {
     int offset = 8;
 
     while (offset < bytes.length) {
@@ -643,8 +629,13 @@ class CafReader {
         final int remainderFrames =
             ByteData.sublistView(Uint8List.fromList(packetTableBytes), 20, 24)
                 .getUint32(0);
-        final List<int> entries = _decodePacketTableEntries(
-            packetTableBytes.sublist(24), numberPackets);
+        final _DecodedPacketTableEntries decodedEntries =
+            _decodePacketTableEntries(
+          packetTableBytes.sublist(24),
+          numberPackets,
+          audioFormat: audioFormat,
+          bytes: bytes,
+        );
 
         log('Pakt numberPackets: $numberPackets numberValidFrames: $numberValidFrames primingFrames: $primingFrames remainderFrames: $remainderFrames');
 
@@ -657,7 +648,11 @@ class CafReader {
 
         log('Packet table chunk found at offset $offset with size $chunkSize');
 
-        return PacketTable(header: header, entries: entries);
+        return PacketTable(
+          header: header,
+          entries: decodedEntries.entries,
+          frameEntries: decodedEntries.frameEntries,
+        );
       }
 
       // Move to the next chunk
@@ -667,27 +662,70 @@ class CafReader {
     throw Exception('Packet table chunk not found');
   }
 
-  List<int> _decodePacketTableEntries(Uint8List entryBytes, int packetCount) {
+  _DecodedPacketTableEntries _decodePacketTableEntries(
+    Uint8List entryBytes,
+    int packetCount, {
+    AudioFormat? audioFormat,
+    required Uint8List bytes,
+  }) {
     if (packetCount == 0) {
-      return <int>[];
+      return const _DecodedPacketTableEntries(
+        entries: <int>[],
+        frameEntries: <int>[],
+      );
+    }
+
+    final AudioFormat resolvedAudioFormat =
+        audioFormat ?? readAudioFormat(bytes);
+    final bool variablePacketSizes = resolvedAudioFormat.bytesPerPacket == 0;
+    final bool variablePacketFrames = resolvedAudioFormat.framesPerPacket == 0;
+
+    if (!variablePacketSizes && !variablePacketFrames) {
+      return const _DecodedPacketTableEntries(
+        entries: <int>[],
+        frameEntries: <int>[],
+      );
     }
 
     final List<int> entries = <int>[];
-    int value = 0;
+    final List<int> frameEntries = <int>[];
+    int offset = 0;
 
-    for (final int byte in entryBytes) {
-      value = (value << 7) | (byte & 0x7F);
-      if ((byte & 0x80) == 0) {
+    for (int i = 0; i < packetCount; i++) {
+      if (variablePacketSizes) {
+        final (int value, int nextOffset) =
+            _decodeNextPacketTableEntry(entryBytes, offset);
         entries.add(value);
-        if (entries.length == packetCount) {
-          return entries;
-        }
-        value = 0;
+        offset = nextOffset;
+      }
+      if (variablePacketFrames) {
+        final (int value, int nextOffset) =
+            _decodeNextPacketTableEntry(entryBytes, offset);
+        frameEntries.add(value);
+        offset = nextOffset;
       }
     }
 
-    throw Exception(
-        'Packet table did not contain $packetCount complete varint entries');
+    return _DecodedPacketTableEntries(
+      entries: entries,
+      frameEntries: frameEntries,
+    );
+  }
+
+  (int, int) _decodeNextPacketTableEntry(Uint8List entryBytes, int offset) {
+    int value = 0;
+    int currentOffset = offset;
+
+    while (currentOffset < entryBytes.length) {
+      final int byte = entryBytes[currentOffset];
+      value = (value << 7) | (byte & 0x7F);
+      currentOffset++;
+      if ((byte & 0x80) == 0) {
+        return (value, currentOffset);
+      }
+    }
+
+    throw Exception('Packet table ended before a complete varint entry');
   }
 
   /// Reads the audio format from the CAF file.
@@ -749,6 +787,16 @@ class CafReader {
 
     throw Exception('Audio format chunk not found');
   }
+}
+
+class _DecodedPacketTableEntries {
+  const _DecodedPacketTableEntries({
+    required this.entries,
+    required this.frameEntries,
+  });
+
+  final List<int> entries;
+  final List<int> frameEntries;
 }
 
 /// A class representing an OGG file.
