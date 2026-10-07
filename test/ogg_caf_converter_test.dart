@@ -25,28 +25,66 @@ Future<bool> _afconvertSupportsOpus(String path) async {
       formats.contains("'opus'");
 }
 
-Future<List<Uint8List>> _readOggAudioPackets(String path) async {
-  final OggReader reader = OggReader(path);
-  final List<Uint8List> packets = <Uint8List>[];
-  await reader.readHeaders();
+Future<List<String>> _readFfmpegPacketHashes(
+    String ffmpegPath, String input) async {
+  final ProcessResult result = await Process.run(ffmpegPath, <String>[
+    '-v',
+    'error',
+    '-xerror',
+    '-i',
+    input,
+    '-map',
+    '0:a:0',
+    '-c:a',
+    'copy',
+    '-f',
+    'framehash',
+    '-hash',
+    'sha256',
+    '-',
+  ]);
+  expect(result.exitCode, equals(0), reason: result.stderr.toString());
 
-  while (true) {
-    final OggPageResult page = await reader.parseNextPage();
-    if (page.error != null) {
-      break;
-    }
-
-    if (page.segments.isNotEmpty &&
-        String.fromCharCodes(page.segments.first.take(8).toList()) ==
-            'OpusTags') {
+  final List<String> packets = <String>[];
+  for (final String line in (result.stdout as String).split('\n')) {
+    if (line.trim().isEmpty || line.startsWith('#')) {
       continue;
     }
-
-    packets.addAll(page.segments);
+    final List<String> fields = line.split(',');
+    expect(fields.length, greaterThanOrEqualTo(6), reason: line);
+    // CAF and OGG use different timestamps and trim side data. Compare only
+    // the encoded packet size and hash, preserving packet boundaries/order.
+    packets.add('${fields[4].trim()}:${fields[5].trim()}');
   }
-
-  await reader.close();
   return packets;
+}
+
+Future<List<int>> _decodeFfmpegAudio(String ffmpegPath, String input,
+    {String? filter, bool skipManual = false}) async {
+  final ProcessResult result = await Process.run(
+    ffmpegPath,
+    <String>[
+      '-v',
+      'error',
+      '-xerror',
+      if (skipManual) ...<String>['-flags2', '+skip_manual'],
+      '-i',
+      input,
+      '-map',
+      '0:a:0',
+      if (filter != null) ...<String>['-af', filter],
+      '-c:a',
+      'pcm_s16le',
+      '-ar',
+      '48000',
+      '-f',
+      's16le',
+      '-',
+    ],
+    stdoutEncoding: null,
+  );
+  expect(result.exitCode, equals(0), reason: result.stderr.toString());
+  return result.stdout as List<int>;
 }
 
 Future<(AudioFormat, PacketTable, Uint8List)> _readCafContents(
@@ -152,9 +190,11 @@ void main() {
       final String? afconvertPath = await _findExecutable('afconvert');
       if (afconvertPath == null) {
         markTestSkipped('afconvert is not available');
+        return;
       }
-      if (!await _afconvertSupportsOpus(afconvertPath!)) {
+      if (!await _afconvertSupportsOpus(afconvertPath)) {
         markTestSkipped('afconvert does not support Opus on this machine');
+        return;
       }
 
       final Directory tempDir =
@@ -364,59 +404,50 @@ void main() {
       File(outputFile).deleteSync();
     });
 
-    test('matches ffmpeg packet copy output for CAF to OGG', () async {
+    test('preserves CAF packets and trimmed audio with ffmpeg', () async {
       final String? ffmpegPath = await _findExecutable('ffmpeg');
       if (ffmpegPath == null) {
         markTestSkipped('ffmpeg is not available');
+        return;
       }
 
       final Directory tempDir =
           await Directory.systemTemp.createTemp('ogg-caf-ffmpeg-');
-      final String ffmpegOutput = '${tempDir.path}/ffmpeg.ogg';
       final String libraryOutput = '${tempDir.path}/library.ogg';
+      const String inputFile = 'test_resources/test.caf';
 
       try {
-        final ProcessResult ffmpegRemux =
-            await Process.run(ffmpegPath!, <String>[
-          '-v',
-          'error',
-          '-i',
-          'test_resources/test.caf',
-          '-c',
-          'copy',
-          ffmpegOutput,
-        ]);
-        expect(ffmpegRemux.exitCode, equals(0),
-            reason: ffmpegRemux.stderr.toString());
-
         await oggCafConverter.convertCafToOgg(
-          input: 'test_resources/test.caf',
+          input: inputFile,
           output: libraryOutput,
         );
 
-        final ProcessResult ffmpegDecode =
-            await Process.run(ffmpegPath, <String>[
-          '-v',
-          'error',
-          '-i',
-          libraryOutput,
-          '-f',
-          'null',
-          '-',
-        ]);
-        expect(ffmpegDecode.exitCode, equals(0),
-            reason: ffmpegDecode.stderr.toString());
+        // Older FFmpeg CAF demuxers do not synthesize the OpusHead extradata
+        // required by the OGG muxer for this Apple CAF fixture. The framehash
+        // muxer can still independently read and hash the original packets.
+        final List<String> expectedPackets =
+            await _readFfmpegPacketHashes(ffmpegPath, inputFile);
+        final List<String> actualPackets =
+            await _readFfmpegPacketHashes(ffmpegPath, libraryOutput);
+        expect(expectedPackets, hasLength(151));
+        expect(actualPackets, equals(expectedPackets));
 
-        final List<Uint8List> expectedPackets =
-            await _readOggAudioPackets(ffmpegOutput);
-        final List<Uint8List> actualPackets =
-            await _readOggAudioPackets(libraryOutput);
-
-        expect(actualPackets.length, equals(expectedPackets.length));
-        for (int i = 0; i < actualPackets.length; i++) {
-          expect(actualPackets[i], equals(expectedPackets[i]),
-              reason: 'Packet mismatch at index $i');
-        }
+        // The fixture's CAF packet table is in 24 kHz frames: 156 priming,
+        // 72000 valid, and 324 remainder. Opus decodes at 48 kHz. Disable
+        // automatic trimming for the reference so this also works with newer
+        // FFmpeg versions that support CAF trims, then apply them explicitly.
+        // The OGG decoder must apply its trim metadata itself.
+        final List<int> expectedAudio = await _decodeFfmpegAudio(
+          ffmpegPath,
+          inputFile,
+          filter: 'atrim=start_sample=312:end_sample=144312',
+          skipManual: true,
+        );
+        final List<int> actualAudio =
+            await _decodeFfmpegAudio(ffmpegPath, libraryOutput);
+        // Three seconds of mono, signed 16-bit PCM at 48 kHz.
+        expect(expectedAudio, hasLength(144000 * 2));
+        expect(actualAudio, equals(expectedAudio));
       } finally {
         if (tempDir.existsSync()) {
           tempDir.deleteSync(recursive: true);
