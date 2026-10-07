@@ -13,7 +13,7 @@ void main() {
 
     test('reads Opus data successfully', () async {
       final OggReader reader = OggReader('test_resources/test.ogg');
-      final OpusData opusData = await reader.readOpusData(sampleRate: 48000);
+      final OpusData opusData = await reader.readOpusData();
       expect(opusData.audioData, isNotEmpty);
       expect(opusData.frameSize, isNotNull);
       await reader.close();

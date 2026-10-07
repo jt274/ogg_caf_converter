@@ -262,7 +262,7 @@ class PacketTable {
   final PacketTableHeader header;
 
   /// The list of entries in the packet table.
-  final Uint8List entries;
+  final List<int> entries;
 
   /// Encodes the packet table to a Uint8List.
   Uint8List encode() {
@@ -292,6 +292,10 @@ class PacketTable {
 
   /// Encodes an integer to `data` using variable-length encoding technique (varint) format.
   Uint8List encodeVarint(int value) {
+    if (value == 0) {
+      return Uint8List.fromList(<int>[0]);
+    }
+
     final List<int> bytes = <int>[];
     int cur = value;
     while (cur != 0) {

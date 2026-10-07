@@ -17,6 +17,50 @@ const int pageHeaderLen = 27;
 /// Length of the ID page payload.
 const int idPagePayloadLength = 19;
 
+/// Opus granule positions and trim values are always counted at 48 kHz.
+const int opusFixedSampleRate = 48000;
+
+/// Returns the number of decoded PCM samples contributed by an Opus packet.
+int getOpusPacketSampleCount(Uint8List packet) {
+  if (packet.isEmpty) {
+    throw Exception('Encountered empty Opus packet');
+  }
+
+  final int toc = packet[0];
+  final int config = toc >> 3;
+  final int frameCountCode = toc & 0x03;
+
+  int framesPerPacket = 0;
+  switch (frameCountCode) {
+    case 0:
+      framesPerPacket = 1;
+    case 1:
+    case 2:
+      framesPerPacket = 2;
+    case 3:
+      if (packet.length < 2) {
+        throw Exception('Malformed Opus packet with code 3 and no frame count');
+      }
+      framesPerPacket = packet[1] & 0x3F;
+      if (framesPerPacket == 0) {
+        throw Exception('Malformed Opus packet with zero frames');
+      }
+    default:
+      throw Exception('Malformed Opus packet with invalid frame count code');
+  }
+
+  late final int samplesPerFrame;
+  if (config >= 16) {
+    samplesPerFrame = <int>[120, 240, 480, 960][config & 0x03];
+  } else if (config >= 12) {
+    samplesPerFrame = <int>[480, 960][config & 0x01];
+  } else {
+    samplesPerFrame = <int>[480, 960, 1920, 2880][config & 0x03];
+  }
+
+  return samplesPerFrame * framesPerPacket;
+}
+
 /// Enum representing possible errors that can occur while reading an Ogg file.
 enum OggReaderError {
   nilStream,
@@ -46,7 +90,9 @@ class OpusData {
   OpusData(
       {required this.audioData,
       required this.trailingData,
-      required this.frameSize});
+      required this.frameSize,
+      required this.totalSamples,
+      required this.finalGranulePosition});
 
   /// List of audio data bytes.
   final Uint8List audioData;
@@ -56,6 +102,12 @@ class OpusData {
 
   /// Size of the audio frame.
   final int frameSize;
+
+  /// Total decoded samples represented by all packets in the file.
+  final int totalSamples;
+
+  /// Final granule position from the last audio page with completed packets.
+  final int finalGranulePosition;
 }
 
 /// Class representing the header data from the Ogg file.
@@ -199,10 +251,12 @@ class OggReader {
 
   /// Reads Opus data from the Ogg file.
   /// Throws an exception if an error occurs while reading the Opus data.
-  Future<OpusData> readOpusData({required int sampleRate}) async {
+  Future<OpusData> readOpusData() async {
     final List<int> audioData = <int>[];
     int frameSize = 0;
     final List<int> trailingData = <int>[];
+    int totalSamples = 0;
+    int finalGranulePosition = 0;
 
     while (true) {
       final OggPageResult result = await parseNextPage();
@@ -226,33 +280,29 @@ class OggReader {
       for (final Uint8List segment in segments) {
         trailingData.add(segment.length);
         audioData.addAll(segment);
+        final int packetSampleCount = getOpusPacketSampleCount(segment);
+        frameSize = frameSize == 0 ? packetSampleCount : frameSize;
+        totalSamples += packetSampleCount;
       }
 
-      if (header?.index == 2) {
-        final Uint8List tmpPacket = segments[0];
-        if (tmpPacket.isNotEmpty) {
-          final int tmptoc = tmpPacket[0] & 255;
-          final int tocConfig = tmptoc >> 3;
-          final int frameCode = tocConfig & 0x03;
-
-          if (tocConfig < 12) {
-            // SILK mode
-            frameSize = <int>[10, 20, 40, 60][frameCode] * sampleRate ~/ 1000;
-          } else if (tocConfig < 16) {
-            // Hybrid mode
-            frameSize = <int>[10, 20, 40, 60][frameCode] * sampleRate ~/ 1000;
-          } else {
-            // CELT mode
-            frameSize = <num>[2.5, 5, 10, 20][frameCode] * sampleRate ~/ 1000;
-          }
-        }
+      if (header != null &&
+          header.granulePosition != 0xFFFFFFFFFFFFFFFF &&
+          segments.isNotEmpty) {
+        finalGranulePosition = header.granulePosition;
       }
+    }
+
+    if (frameSize == 0 && trailingData.isNotEmpty) {
+      frameSize = getOpusPacketSampleCount(
+          Uint8List.fromList(audioData.sublist(0, trailingData.first)));
     }
 
     return OpusData(
         audioData: Uint8List.fromList(audioData),
         trailingData: Uint8List.fromList(trailingData),
-        frameSize: frameSize);
+        frameSize: frameSize,
+        totalSamples: totalSamples,
+        finalGranulePosition: finalGranulePosition);
   }
 
   /// Parses the next page in the Ogg file.

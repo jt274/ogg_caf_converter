@@ -117,7 +117,7 @@ void main() {
           primingFrames: 3,
           remainderFrames: 4,
         ),
-        entries: Uint8List.fromList(<int>[5, 6, 7]),
+        entries: <int>[5, 6, 7],
       );
       final Uint8List encoded = packetTable.encode();
       expect(ByteData.sublistView(encoded).getInt64(0), equals(1));
@@ -125,6 +125,20 @@ void main() {
       expect(ByteData.sublistView(encoded).getInt32(16), equals(3));
       expect(ByteData.sublistView(encoded).getInt32(20), equals(4));
       expect(encoded.sublist(24), equals(<int>[5, 6, 7]));
+    });
+
+    test('encodes large packet sizes as varints', () {
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 3,
+          numberValidFrames: 2,
+          primingFrames: 3,
+          remainderFrames: 4,
+        ),
+        entries: <int>[5, 128, 300],
+      );
+      final Uint8List encoded = packetTable.encode();
+      expect(encoded.sublist(24), equals(<int>[5, 129, 0, 130, 44]));
     });
   });
 

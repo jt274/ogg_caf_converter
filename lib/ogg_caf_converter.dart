@@ -61,8 +61,7 @@ class OggCafConverter {
     try {
       ogg = OggReader(inputFile);
       final OggHeader header = await ogg.readHeaders();
-      final OpusData opusData =
-          await ogg.readOpusData(sampleRate: header.sampleRate);
+      final OpusData opusData = await ogg.readOpusData();
 
       log('frameSize: ${opusData.frameSize}');
 
@@ -71,6 +70,9 @@ class OggCafConverter {
         audioData: opusData.audioData,
         trailingData: opusData.trailingData,
         frameSize: opusData.frameSize,
+        validFrames: opusData.finalGranulePosition - header.preSkip,
+        primingFrames: header.preSkip,
+        remainderFrames: opusData.totalSamples - opusData.finalGranulePosition,
       );
 
       return cf.encode();
@@ -160,10 +162,17 @@ class OggCafConverter {
         audioData: audioData,
         packetTable: packetTable.entries,
         channels: audioFormat.channelsPerPacket,
-        preSkip: audioFormat.framesPerPacket,
+        preSkip: _scaleFrameCountToOpusSamples(
+          frameCount: packetTable.header.primingFrames,
+          sampleRate: audioFormat.sampleRate.toInt(),
+        ),
         sampleRate: audioFormat.sampleRate.toInt(),
         version: 1,
         frameSize: audioFormat.framesPerPacket,
+        remainderFrames: _scaleFrameCountToOpusSamples(
+          frameCount: packetTable.header.remainderFrames,
+          sampleRate: audioFormat.sampleRate.toInt(),
+        ),
         repackage: false,
       );
 
@@ -191,12 +200,13 @@ class OggCafConverter {
   /// Builds an OGG file from provided data.
   OggFile buildOggFile({
     required Uint8List audioData,
-    required Uint8List packetTable,
+    required List<int> packetTable,
     required int channels,
     required int preSkip,
     required int sampleRate,
     required int version,
     required int frameSize,
+    int remainderFrames = 0,
     required bool repackage,
   }) {
     final OggFile oggFile = OggFile(pages: <OggPage>[]);
@@ -205,7 +215,8 @@ class OggCafConverter {
     int pageSequenceNumber = 0;
     final int serialNumber = DateTime.now().millisecondsSinceEpoch &
         0xFFFFFFFF; // Unique serial number
-    int headerType = 0x02; // Begin of stream
+    bool pageStartsWithContinuation = false;
+    bool currentPageHasCompletedPacket = false;
 
     // Helper function to create a page header
     Uint8List createPageHeader({
@@ -233,7 +244,8 @@ class OggCafConverter {
       final Uint8List page = Uint8List.fromList(header + body);
       int crc = 0;
       for (final int byte in page) {
-        crc = (crc << 8) ^ _crcLookupTable[((crc >> 24) & 0xFF) ^ byte];
+        crc = ((crc << 8) & 0xFFFFFFFF) ^
+            _crcLookupTable[((crc >> 24) & 0xFF) ^ byte];
       }
       return crc & 0xFFFFFFFF;
     }
@@ -242,7 +254,7 @@ class OggCafConverter {
     Uint8List createOpusHeadPacket() {
       final List<int> packet = <int>[];
       packet.addAll(utf8.encode('OpusHead')); // Signature
-      packet.add(1); // Version
+      packet.add(version); // Version
       packet.add(channels); // Channels
       packet.addAll(_encodeUint16(preSkip)); // Pre-skip
       packet.addAll(_encodeUint32(sampleRate)); // Sample rate
@@ -303,10 +315,41 @@ class OggCafConverter {
     const int maxOggSegmentSize = 255;
     List<int> currentSegment = <int>[];
     List<int> currentSegmentsTable = <int>[];
-    headerType = 0x01; // continuation flag set for the first audio page
+
+    int currentPageGranulePosition() {
+      if (!currentPageHasCompletedPacket && pageStartsWithContinuation) {
+        return 0xFFFFFFFFFFFFFFFF;
+      }
+      return granulePosition;
+    }
+
+    void flushAudioPage({
+      required int granulePosition,
+      required bool endOfStream,
+    }) {
+      final int headerType =
+          (pageStartsWithContinuation ? 0x01 : 0x00) | (endOfStream ? 0x04 : 0);
+      header = createPageHeader(
+        granulePosition: granulePosition,
+        serialNumber: serialNumber,
+        pageSequenceNumber: pageSequenceNumber,
+        segments: Uint8List.fromList(currentSegmentsTable),
+        headerType: headerType,
+      );
+      crc = calculateChecksum(header, Uint8List.fromList(currentSegment));
+      header.setRange(22, 26, _encodeUint32(crc));
+      oggFile.pages.add(
+          OggPage(header: header, body: Uint8List.fromList(currentSegment)));
+      pageSequenceNumber++;
+      currentSegment = <int>[];
+      currentSegmentsTable = <int>[];
+      currentPageHasCompletedPacket = false;
+      pageStartsWithContinuation = false;
+    }
 
     for (final Uint8List packet in packets) {
       final int packetSize = packet.length;
+      final int packetSampleCount = getOpusPacketSampleCount(packet);
       final int segmentCount =
           (packetSize + maxOggSegmentSize - 1) ~/ maxOggSegmentSize;
 
@@ -320,25 +363,11 @@ class OggCafConverter {
         // (Optional boundary check — you may handle partial flush if needed.)
         if (currentSegmentsTable.length == 255 ||
             currentSegment.length + segmentSize > 65025) {
-          // Create and finalize the current page
-          header = createPageHeader(
-            granulePosition: granulePosition,
-            serialNumber: serialNumber,
-            pageSequenceNumber: pageSequenceNumber,
-            segments: Uint8List.fromList(currentSegmentsTable),
-            headerType: headerType,
+          flushAudioPage(
+            granulePosition: currentPageGranulePosition(),
+            endOfStream: false,
           );
-          crc = calculateChecksum(header, Uint8List.fromList(currentSegment));
-          header.setRange(22, 26, _encodeUint32(crc));
-          oggFile.pages.add(OggPage(
-              header: header, body: Uint8List.fromList(currentSegment)));
-          pageSequenceNumber++;
-
-          // Reset for the next page
-          currentSegment = <int>[];
-          currentSegmentsTable = <int>[];
-          // After the first audio page, normal pages won't have the "fresh" (0x02) bit
-          headerType = 0x00;
+          pageStartsWithContinuation = true;
         }
 
         // Append this segment of data
@@ -346,32 +375,30 @@ class OggCafConverter {
         currentSegmentsTable.add(segmentSize);
       }
 
-      // Update granule position (this is a simplistic approach)
-      if (repackage) {
-        granulePosition += frameSize;
-      } else {
-        // For example, if sampleRate=48000, frameSize is typically the number
-        // of samples in an Opus frame at 48 kHz, so we scale if needed.
-        granulePosition += frameSize * (48000 ~/ sampleRate);
-      }
+      granulePosition += packetSampleCount;
+      currentPageHasCompletedPacket = true;
     }
 
     // Flush the last page (end of stream)
     if (currentSegment.isNotEmpty) {
-      header = createPageHeader(
-        granulePosition: granulePosition,
-        serialNumber: serialNumber,
-        pageSequenceNumber: pageSequenceNumber,
-        segments: Uint8List.fromList(currentSegmentsTable),
-        headerType: 0x04, // End of stream
+      flushAudioPage(
+        granulePosition: granulePosition - remainderFrames,
+        endOfStream: true,
       );
-      crc = calculateChecksum(header, Uint8List.fromList(currentSegment));
-      header.setRange(22, 26, _encodeUint32(crc));
-      oggFile.pages.add(
-          OggPage(header: header, body: Uint8List.fromList(currentSegment)));
     }
 
     return oggFile;
+  }
+
+  int _scaleFrameCountToOpusSamples({
+    required int frameCount,
+    required int sampleRate,
+  }) {
+    if (sampleRate <= 0 || 48000 % sampleRate != 0) {
+      throw Exception('Unsupported Opus sample rate: $sampleRate');
+    }
+
+    return frameCount * (48000 ~/ sampleRate);
   }
 
   Uint8List _encodeUint64(int value) {
@@ -403,8 +430,7 @@ class OggCafConverter {
     ]);
   }
 
-  final Uint8List _crcLookupTable =
-      Uint8List.fromList(List<int>.generate(256, (int i) {
+  final List<int> _crcLookupTable = List<int>.generate(256, (int i) {
     int r = i << 24;
     for (int j = 0; j < 8; j++) {
       if (r & 0x80000000 != 0) {
@@ -414,7 +440,7 @@ class OggCafConverter {
       }
     }
     return r;
-  }));
+  });
 
   /// Calculates the length of the packet table based on trailing data.
   int _calculatePacketTableLength(Uint8List trailingData) {
@@ -444,14 +470,16 @@ class OggCafConverter {
     required Uint8List audioData,
     required Uint8List trailingData,
     required int frameSize,
+    required int validFrames,
+    required int primingFrames,
+    required int remainderFrames,
   }) {
     final int lenAudio = audioData.length;
     final int packets = trailingData.length;
-    final int frames = frameSize * packets;
 
     final int packetTableLength = _calculatePacketTableLength(trailingData);
 
-    log('frameSize: $frameSize packetTableLength: $packetTableLength frames: $frames packets: $packets lenAudio: $lenAudio');
+    log('frameSize: $frameSize packetTableLength: $packetTableLength validFrames: $validFrames primingFrames: $primingFrames remainderFrames: $remainderFrames packets: $packets lenAudio: $lenAudio');
 
     final CafFile cf = CafFile(
         fileHeader: FileHeader(
@@ -462,7 +490,7 @@ class OggCafConverter {
       header:
           ChunkHeader(chunkType: ChunkTypes.audioDescription, chunkSize: 32),
       contents: AudioFormat(
-        sampleRate: header.sampleRate.toDouble(),
+        sampleRate: opusFixedSampleRate.toDouble(),
         formatID: FourByteString('opus'),
         formatFlags: 0x00000000,
         bytesPerPacket: 0,
@@ -517,9 +545,9 @@ class OggCafConverter {
       contents: PacketTable(
         header: PacketTableHeader(
           numberPackets: packets,
-          numberValidFrames: frames,
-          primingFrames: 0,
-          remainderFrames: 0,
+          numberValidFrames: validFrames,
+          primingFrames: primingFrames,
+          remainderFrames: remainderFrames,
         ),
         entries: trailingData,
       ),
@@ -615,7 +643,8 @@ class CafReader {
         final int remainderFrames =
             ByteData.sublistView(Uint8List.fromList(packetTableBytes), 20, 24)
                 .getUint32(0);
-        final Uint8List entries = packetTableBytes.sublist(24);
+        final List<int> entries = _decodePacketTableEntries(
+            packetTableBytes.sublist(24), numberPackets);
 
         log('Pakt numberPackets: $numberPackets numberValidFrames: $numberValidFrames primingFrames: $primingFrames remainderFrames: $remainderFrames');
 
@@ -628,11 +657,6 @@ class CafReader {
 
         log('Packet table chunk found at offset $offset with size $chunkSize');
 
-        // Check for padding or extra bytes in the packet table
-        if (entries.length != numberPackets) {
-          log('Warning: Number of packets in header does not match the length of packet table entries (${entries.length} / $numberPackets)');
-        }
-
         return PacketTable(header: header, entries: entries);
       }
 
@@ -641,6 +665,29 @@ class CafReader {
     }
 
     throw Exception('Packet table chunk not found');
+  }
+
+  List<int> _decodePacketTableEntries(Uint8List entryBytes, int packetCount) {
+    if (packetCount == 0) {
+      return <int>[];
+    }
+
+    final List<int> entries = <int>[];
+    int value = 0;
+
+    for (final int byte in entryBytes) {
+      value = (value << 7) | (byte & 0x7F);
+      if ((byte & 0x80) == 0) {
+        entries.add(value);
+        if (entries.length == packetCount) {
+          return entries;
+        }
+        value = 0;
+      }
+    }
+
+    throw Exception(
+        'Packet table did not contain $packetCount complete varint entries');
   }
 
   /// Reads the audio format from the CAF file.
