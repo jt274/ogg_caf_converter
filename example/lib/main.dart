@@ -46,4 +46,24 @@ void main() async {
   } catch (e) {
     // Handle error
   }
+
+  // Repackage OGG (sanitize container and recalculate granule positions)
+  try {
+    await OggCafConverter().repackageOgg(
+      input: inputFilePath,
+      output: outputFilePath,
+      deleteInput: true,
+    );
+  } catch (e) {
+    // Handle error
+  }
+
+  // Repackage OGG in memory
+  try {
+    final Uint8List bytes = await OggCafConverter().repackageOggInMemory(
+      input: inputFilePath,
+    );
+  } catch (e) {
+    // Handle error
+  }
 }

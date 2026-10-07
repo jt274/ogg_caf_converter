@@ -200,6 +200,107 @@ class OggCafConverter {
     }
   }
 
+  /// Repackages an OPUS audio file in OGG container format and saves it to the specified output path.
+  ///
+  /// [input] is the path to the OPUS audio file in OGG container to be repackaged.
+  /// Must have read access to this file path.
+  ///
+  /// [output] is the path where the resulting OPUS audio file in OGG container will be saved.
+  /// Must have write access to this file path.
+  ///
+  /// [deleteInput] specifies whether the input file should be deleted after repackaging.
+  /// Must have write access to the input file path.
+  Future<void> repackageOgg({
+    required String input,
+    required String output,
+    bool deleteInput = false,
+  }) async {
+    try {
+      await _repackageOgg(input, output, deleteInput);
+    } catch (e) {
+      throw Exception(e);
+    }
+  }
+
+  Future<void> _repackageOgg(
+      String inputFile, String outputPath, bool deleteInput) async {
+    try {
+      final Uint8List encodedData = await _repackageOggInMemory(inputFile);
+
+      final File file = File(outputPath);
+
+      if (!file.existsSync()) {
+        await file.create(recursive: true);
+      }
+
+      // Write repackaged OGG file to output path
+      await file.writeAsBytes(encodedData);
+
+      if (deleteInput) {
+        bool isSameFile = inputFile == outputPath;
+        if (!isSameFile) {
+          try {
+            isSameFile = FileSystemEntity.identicalSync(inputFile, outputPath);
+          } catch (_) {}
+        }
+        if (!isSameFile) {
+          await File(inputFile).delete();
+        }
+      }
+    } catch (e, stackTrace) {
+      log('Error repackaging OGG: $e');
+      log(stackTrace.toString());
+      throw Exception(e);
+    }
+  }
+
+  /// Repackages an OPUS audio file in OGG container format and returns the bytes in memory as a Uint8List.
+  ///
+  /// [input] is the path to the OPUS audio file in OGG container to be repackaged.
+  Future<Uint8List> repackageOggInMemory({
+    required String input,
+  }) async {
+    try {
+      return await _repackageOggInMemory(input);
+    } catch (e) {
+      throw Exception(e);
+    }
+  }
+
+  Future<Uint8List> _repackageOggInMemory(String inputFile) async {
+    late final OggReader ogg;
+    try {
+      ogg = OggReader(inputFile);
+      final OggHeader header = await ogg.readHeaders();
+      final OpusData opusData = await ogg.readOpusData();
+
+      final int remainderFrames = (opusData.finalGranulePosition > 0 &&
+              opusData.finalGranulePosition <= opusData.totalSamples)
+          ? opusData.totalSamples - opusData.finalGranulePosition
+          : 0;
+
+      final OggFile newOgg = buildOggFile(
+        audioData: opusData.audioData,
+        packetTable: opusData.trailingData,
+        channels: header.channels,
+        preSkip: header.preSkip,
+        sampleRate: header.sampleRate,
+        version: header.version,
+        frameSize: opusData.frameSize,
+        remainderFrames: remainderFrames,
+        repackage: true,
+      );
+
+      return newOgg.encode();
+    } catch (e, stackTrace) {
+      log('Error repackaging OGG: $e');
+      log(stackTrace.toString());
+      throw Exception(e);
+    } finally {
+      await ogg.close();
+    }
+  }
+
   /// Builds an OGG file from provided data.
   OggFile buildOggFile({
     required Uint8List audioData,
@@ -452,7 +553,7 @@ class OggCafConverter {
   CafFile _buildCafFile({
     required OggHeader header,
     required Uint8List audioData,
-    required Uint8List packetSizes,
+    required List<int> packetSizes,
     required List<int> packetFrames,
     required int frameSize,
     required int validFrames,
@@ -468,7 +569,7 @@ class OggCafConverter {
         primingFrames: primingFrames,
         remainderFrames: remainderFrames,
       ),
-      entries: packetSizes.toList(),
+      entries: packetSizes,
       frameEntries: packetFrames,
     );
     final int packetTableLength = packetTable.encode().length;

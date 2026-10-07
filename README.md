@@ -27,30 +27,38 @@ different container format. This means that the audio quality is not affected by
 speed is primarily limited by the file system I/O speed.
 
 ## Features
-- Converts OPUS audio files from OGG (standard spec) to CAF (Apple) container format.
-- Converts OPUS audio files from CAF (Apple) to OGG (standard spec) container format.
-- Lightweight, pure dart implementation.
+- **CAF ↔ OGG Container Conversion**: Converts OPUS audio files between standard OGG and Apple CAF container formats in either direction.
+- **Variable & Constant Duration Support**: Supports both constant-duration and variable-duration Opus packets (SILK, CELT, and Hybrid modes).
+- **In-Memory & File Operations**: Convert and repackage files directly on disk or in-memory (`Uint8List`).
+- **OGG Stream Repackaging & Repair**: Sanitizes OGG Opus containers, rebuilds canonical `OpusHead` and `OpusTags` headers, recalculates sequential 48 kHz granule positions per RFC 7845, verifies CRC-32 checksums, and normalizes packet lacing and page framing.
+- **Accurate Trim Metadata**: Accurately maps pre-skip priming frames (`preSkip` ↔ `primingFrames`) and end trim (`remainderFrames` ↔ final granule position) between CAF and OGG.
+- **Pure Dart**: Zero external dependencies, no native binaries, and no FFmpeg required.
 
 ## Platform Support
 
 | Android | iOS | Web | Windows | Linux | MacOS |
 | :-----: | :-: |:---:|:-------:| :---: |:-----:|
-|   ✅    | ✅  |  ❓  |    ❓    |  ❓   |   ❓   |
+|   ✅    | ✅  |  ❌  |    ✅     |  ✅   |   ✅    |
 
-Testing on unknown platforms is welcome! Please file a GitHub issue if you determine how the 
-package functions on another platform.
+- **Web**: Currently unsupported because the package relies directly on `dart:io` (`File`, `RandomAccessFile`) and uses 64-bit integer bitmasks incompatible with Dart2JS/web compilation.
 
 ## Getting started
 
 Add the package to your `pubspec.yaml` file:
 
-`dart pub add ogg_caf_converter`
+```bash
+dart pub add ogg_caf_converter
+```
 
 or
 
-`flutter pub add ogg_caf_converter`
+```bash
+flutter pub add ogg_caf_converter
+```
 
 ## Usage
+
+### Converting Between OGG and CAF
 
 To convert an OPUS audio file from a standard OGG container format to an Apple CAF container format,
 use the `convertOggToCaf()` method.
@@ -58,37 +66,47 @@ use the `convertOggToCaf()` method.
 To convert an OPUS audio file from an Apple CAF container format to a standard OGG container format,
 use the `convertCafToOgg()` method.
 
-Both functions take the same input parameters:
+Both conversion functions take the following parameters:
 - `input`: The path to the input file (must have read access to this file path).
 - `output`: The path to the output file (must have write access to this file path).
-- `deleteInput`: Whether to delete the input file after successful conversion (must have write 
-access to the input file path). Defaults to `false`.
+- `deleteInput`: Whether to delete the input file after successful conversion. Defaults to `false`.
 
-For in-memory conversion without creating a new file, use the `convertOggToCafInMemory()` and 
-`convertCafToOggInMemory()` methods. These functions return a `Uint8List` of the converted audio 
-file bytes. Both functions take an `input` parameter of the input file path.
+For in-memory conversion without creating a new file, use `convertOggToCafInMemory()` and 
+`convertCafToOggInMemory()`. Both return a `Uint8List` of the converted audio file bytes.
+
+### Repackaging OGG Files
+
+Many mobile audio recording packages produce raw OGG Opus recordings with non-standard page framing,
+missing or non-linear granule positions, or malformed metadata headers. These issues often prevent audio 
+players from seeking accurately or calculating stream duration correctly.
+
+To repair and repackage an OGG file without re-encoding audio:
+- `repackageOgg()`: Reads the input OGG Opus file, strips non-standard framing, recalculates accurate 48 kHz granule positions for every packet, writes canonical `OpusHead` and `OpusTags` pages with valid CRC-32 checksums, and saves to `output`. In-place repackaging (`input == output`) is supported safely.
+- `repackageOggInMemory()`: Performs the same container sanitization and returns the resulting OGG bytes as a `Uint8List`.
 
 ## Example
 
-Make sure to place the function call inside of a try-catch block to handle any exceptions, and await
-the function call to ensure the conversion is complete before continuing.
+Make sure to place function calls inside of a try-catch block to handle exceptions, and await
+the call to ensure processing is complete before continuing.
 
 ```dart
 import 'dart:typed_data';
 
 import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 
-const String inputFilePath = 'path/to/input/file.opus'; // Input file location
-const String outputFilePath =
-    'path/to/output/file.opus'; // Output file location
+const String inputOgg = 'path/to/input.ogg';
+const String outputCaf = 'path/to/output.caf';
+const String repackagedOgg = 'path/to/repackaged.ogg';
 
 void main() async {
+  final OggCafConverter converter = OggCafConverter();
+
   // Convert from OGG to CAF
   try {
-    await OggCafConverter().convertOggToCaf(
-      input: inputFilePath,
-      output: outputFilePath,
-      deleteInput: true,
+    await converter.convertOggToCaf(
+      input: inputOgg,
+      output: outputCaf,
+      deleteInput: false,
     );
   } catch (e) {
     // Handle error
@@ -96,28 +114,42 @@ void main() async {
 
   // Convert from CAF to OGG
   try {
-    await OggCafConverter().convertCafToOgg(
-      input: inputFilePath,
-      output: outputFilePath,
-      deleteInput: true,
+    await converter.convertCafToOgg(
+      input: outputCaf,
+      output: inputOgg,
+      deleteInput: false,
     );
   } catch (e) {
     // Handle error
   }
 
-  // Convert from OGG to CAF in memory
+  // Convert in memory
   try {
-    final Uint8List bytes = await OggCafConverter().convertOggToCafInMemory(
-      input: inputFilePath,
+    final Uint8List cafBytes = await converter.convertOggToCafInMemory(
+      input: inputOgg,
+    );
+    final Uint8List oggBytes = await converter.convertCafToOggInMemory(
+      input: outputCaf,
     );
   } catch (e) {
     // Handle error
   }
 
-  // Convert from CAF to OGG in memory
+  // Repackage / repair OGG file
   try {
-    final Uint8List bytes = await OggCafConverter().convertCafToOggInMemory(
-      input: inputFilePath,
+    await converter.repackageOgg(
+      input: inputOgg,
+      output: repackagedOgg,
+      deleteInput: false,
+    );
+  } catch (e) {
+    // Handle error
+  }
+
+  // Repackage OGG in memory
+  try {
+    final Uint8List sanitizedBytes = await converter.repackageOggInMemory(
+      input: inputOgg,
     );
   } catch (e) {
     // Handle error
