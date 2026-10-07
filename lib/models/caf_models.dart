@@ -1,9 +1,9 @@
+// ignore_for_file: avoid_equals_and_hash_code_on_mutable_classes
+
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:meta/meta.dart';
 
 /// A class representing a four-byte string.
-@immutable
 class FourByteString {
   /// Creates a FourByteString from a given string.
   /// If it does not have four Dart string code units and encode to exactly

@@ -759,6 +759,269 @@ void main() {
     });
   });
 
+  group('repackageOgg', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('repackages OGG successfully and preserves audio packets', () async {
+      const String inputFile = 'test_resources/test.ogg';
+      await _withTempDirectory('repackage-ogg-success-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'repackaged.ogg');
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final List<Uint8List> originalPackets =
+            await _readOggAudioPackets(inputFile);
+        final List<Uint8List> repackagedPackets =
+            await _readOggAudioPackets(outputFile);
+
+        expect(repackagedPackets, hasLength(originalPackets.length));
+        expect(repackagedPackets, equals(originalPackets));
+        expect(File(inputFile).existsSync(), isTrue);
+      });
+    });
+
+    test('writes valid OGG CRC checksums', () async {
+      const String inputFile = 'test_resources/test.ogg';
+      await _withTempDirectory('repackage-ogg-crc-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'repackaged.ogg');
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final Uint8List bytes = await File(outputFile).readAsBytes();
+        final List<Uint8List> pages = _iterateOggPages(bytes).toList();
+
+        for (final Uint8List page in pages) {
+          final int writtenCrc =
+              ByteData.sublistView(page, 22, 26).getUint32(0, Endian.little);
+          final int expectedCrc = _computeOggPageCrc(page);
+          expect(writtenCrc, equals(expectedCrc));
+        }
+      });
+    });
+
+    test('writes internally consistent OGG page metadata and BOS/EOS flags',
+        () async {
+      const String inputFile = 'test_resources/test.ogg';
+      await _withTempDirectory('repackage-ogg-metadata-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'repackaged.ogg');
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final OggReader reader = OggReader(outputFile);
+        try {
+          final OggHeader header = await reader.readHeaders();
+          expect(header.channels, equals(1));
+          expect(header.sampleRate, equals(24000));
+          expect(header.preSkip, equals(312));
+
+          int expectedSequence = 1;
+          int lastGranule = 0;
+          OggPageHeader? lastHeader;
+
+          while (true) {
+            final OggPageResult page = await reader.parseNextPage();
+            if (page.error != null) {
+              expect(page.error, equals(OggReaderError.shortPageHeader));
+              break;
+            }
+
+            final OggPageHeader pageHeader = page.pageHeader!;
+            expect(pageHeader.index, equals(expectedSequence));
+            expectedSequence++;
+            lastHeader = pageHeader;
+
+            if (pageHeader.granulePosition != 0xFFFFFFFFFFFFFFFF) {
+              expect(pageHeader.granulePosition,
+                  greaterThanOrEqualTo(lastGranule));
+              lastGranule = pageHeader.granulePosition;
+            }
+          }
+
+          expect(lastHeader, isNotNull);
+          // End of Stream flag (0x04) set on the last page
+          expect((lastHeader!.headerType & 0x04) != 0, isTrue);
+          expect(lastHeader.granulePosition, equals(144312));
+        } finally {
+          await reader.close();
+        }
+      });
+    });
+
+    test('preserves trimming metadata in repackaged OGG', () async {
+      const String inputFile = 'test_resources/test.ogg';
+      await _withTempDirectory('repackage-ogg-trim-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'repackaged.ogg');
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final OggReader origReader = OggReader(inputFile);
+        final OggReader repkgReader = OggReader(outputFile);
+        try {
+          final OggHeader origHeader = await origReader.readHeaders();
+          final OpusData origData = await origReader.readOpusData();
+
+          final OggHeader repkgHeader = await repkgReader.readHeaders();
+          final OpusData repkgData = await repkgReader.readOpusData();
+
+          expect(repkgHeader.preSkip, equals(origHeader.preSkip));
+          expect(repkgData.finalGranulePosition,
+              equals(origData.finalGranulePosition));
+          expect(repkgData.totalSamples, equals(origData.totalSamples));
+        } finally {
+          await origReader.close();
+          await repkgReader.close();
+        }
+      });
+    });
+
+    test('repackages variable-duration synthetic OGG correctly', () async {
+      final OggFile syntheticOgg = _buildVariableDurationSyntheticOgg(
+        preSkip: 120,
+        remainderFrames: 240,
+      );
+
+      await _withTempDirectory('repackage-ogg-variable-',
+          (Directory directory) async {
+        final String inputFile = _tempPath(directory, 'synthetic.ogg');
+        final String outputFile = _tempPath(directory, 'repackaged.ogg');
+        await File(inputFile).writeAsBytes(syntheticOgg.encode());
+
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final List<Uint8List> origPackets =
+            await _readOggAudioPackets(inputFile);
+        final List<Uint8List> repkgPackets =
+            await _readOggAudioPackets(outputFile);
+        expect(repkgPackets, equals(origPackets));
+
+        final OggReader reader = OggReader(outputFile);
+        try {
+          final OggHeader header = await reader.readHeaders();
+          final OpusData data = await reader.readOpusData();
+          expect(header.preSkip, equals(120));
+          expect(data.packetSampleCounts, equals(<int>[480, 960, 480]));
+          expect(data.totalSamples, equals(1920));
+          expect(data.finalGranulePosition, equals(1920 - 240));
+        } finally {
+          await reader.close();
+        }
+      });
+    });
+
+    test('repackages in-place when input equals output', () async {
+      await _withTempDirectory('repackage-ogg-inplace-',
+          (Directory directory) async {
+        final String file = _tempPath(directory, 'audio.ogg');
+        await File('test_resources/test.ogg').copy(file);
+
+        final List<Uint8List> originalPackets =
+            await _readOggAudioPackets(file);
+
+        await oggCafConverter.repackageOgg(
+          input: file,
+          output: file,
+          deleteInput: true,
+        );
+
+        expect(File(file).existsSync(), isTrue);
+        final List<Uint8List> repackagedPackets =
+            await _readOggAudioPackets(file);
+        expect(repackagedPackets, equals(originalPackets));
+      });
+    });
+
+    test('deletes input file after repackaging', () async {
+      await _withTempDirectory('repackage-ogg-delete-input-',
+          (Directory directory) async {
+        final String inputFile = _tempPath(directory, 'input.ogg');
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await File('test_resources/test.ogg').copy(inputFile);
+
+        await oggCafConverter.repackageOgg(
+          input: inputFile,
+          output: outputFile,
+          deleteInput: true,
+        );
+
+        expect(File(inputFile).existsSync(), isFalse);
+        expect(File(outputFile).existsSync(), isTrue);
+      });
+    });
+
+    test('throws exception for invalid OGG input file', () async {
+      const String inputFile = 'test_resources/invalid_ogg.opus';
+      await _withTempDirectory('repackage-ogg-invalid-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.repackageOgg(
+            input: inputFile,
+            output: _tempPath(directory, 'output.ogg'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
+    });
+
+    test('throws exception for non-existent OGG file', () async {
+      await _withTempDirectory('repackage-ogg-missing-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.repackageOgg(
+            input: _tempPath(directory, 'missing.ogg'),
+            output: _tempPath(directory, 'output.ogg'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
+    });
+  });
+
+  group('repackageOggInMemory', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('repackages OGG in memory successfully', () async {
+      const String inputFile = 'test_resources/test.ogg';
+      final Uint8List result =
+          await oggCafConverter.repackageOggInMemory(input: inputFile);
+      expect(result, isNotNull);
+      expect(result.length, greaterThan(0));
+
+      final List<Uint8List> inMemPages = _iterateOggPages(result).toList();
+      expect(inMemPages, isNotEmpty);
+    });
+
+    test('throws exception for invalid OGG input file', () async {
+      const String inputFile = 'test_resources/invalid_ogg.opus';
+      await expectLater(
+        oggCafConverter.repackageOggInMemory(input: inputFile),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('throws exception for non-existent OGG file', () async {
+      const String inputFile = 'test_resources/non_existent.ogg';
+      await expectLater(
+        oggCafConverter.repackageOggInMemory(input: inputFile),
+        throwsA(isA<Exception>()),
+      );
+    });
+  });
+
   group('CafReader', () {
     test('reads empty packet tables when the packet count is zero', () {
       final PacketTable packetTable = PacketTable(

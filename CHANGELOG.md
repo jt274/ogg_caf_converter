@@ -1,3 +1,20 @@
+# 0.3.0
+
+## [0.3.0] - 2026-10-07
+
+### Added
+- Added `repackageOgg()` and `repackageOggInMemory()` to sanitize and repair OGG Opus containers without re-encoding audio.
+Recalculates packet-accurate 48 kHz granule positions per RFC 7845 and normalizes page framing and segment lacing,
+preserves pre-skip (`preSkip`) and end trimming (`remainderFrames`) during repackaging
+and supports in-place file repackaging (`input == output`) safely.
+- Verified Windows, Linux and MacOS support.
+
+### Fixed
+- Fixed integer overflow for Opus packet sizes ≥ 256 bytes in `OpusData.trailingData` by storing as `List<int>` instead of `Uint8List`
+
+### Removed
+- Removed `meta` dependency, making the package completely dependency-free.
+
 # 0.2.0
 
 ## [0.2.0] - 2026-10-07

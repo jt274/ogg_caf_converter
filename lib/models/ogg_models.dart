@@ -106,7 +106,7 @@ class OpusData {
   final Uint8List audioData;
 
   /// List of trailing data bytes.
-  final Uint8List trailingData;
+  final List<int> trailingData;
 
   /// The number of decoded PCM samples contributed by each packet.
   final List<int> packetSampleCounts;
@@ -316,7 +316,7 @@ class OggReader {
 
     return OpusData(
         audioData: Uint8List.fromList(audioData),
-        trailingData: Uint8List.fromList(trailingData),
+        trailingData: trailingData,
         packetSampleCounts: packetSampleCounts,
         frameSize: frameSize,
         totalSamples: totalSamples,
