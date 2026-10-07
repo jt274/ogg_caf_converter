@@ -7,14 +7,41 @@ import 'package:ogg_caf_converter/ogg_caf_converter.dart';
 import 'package:test/test.dart';
 
 Future<String?> _findExecutable(String name) async {
-  final ProcessResult result = await Process.run('which', <String>[name]);
+  final String lookupCommand = Platform.isWindows ? 'where.exe' : 'which';
+  final ProcessResult result;
+  try {
+    result = await Process.run(lookupCommand, <String>[name]);
+  } on ProcessException {
+    return null;
+  }
   if (result.exitCode != 0) {
     return null;
   }
 
-  final String path = (result.stdout as String).trim();
-  return path.isEmpty ? null : path;
+  final List<String> paths = (result.stdout as String)
+      .split(RegExp(r'\r?\n'))
+      .map((String path) => path.trim())
+      .where((String path) => path.isNotEmpty)
+      .toList();
+  return paths.isEmpty ? null : paths.first;
 }
+
+Future<T> _withTempDirectory<T>(
+  String prefix,
+  Future<T> Function(Directory directory) run,
+) async {
+  final Directory directory = await Directory.systemTemp.createTemp(prefix);
+  try {
+    return await run(directory);
+  } finally {
+    if (directory.existsSync()) {
+      await directory.delete(recursive: true);
+    }
+  }
+}
+
+String _tempPath(Directory directory, String filename) =>
+    '${directory.path}${Platform.pathSeparator}$filename';
 
 Future<bool> _afconvertSupportsOpus(String path) async {
   final ProcessResult result = await Process.run(path, <String>['-hf']);
@@ -88,26 +115,31 @@ Future<List<int>> _decodeFfmpegAudio(String ffmpegPath, String input,
 }
 
 Future<List<Uint8List>> _readOggAudioPackets(String path) async {
+  final List<Uint8List> rawPages =
+      _iterateOggPages(await File(path).readAsBytes()).toList();
+  expect(rawPages, isNotEmpty);
   final OggReader reader = OggReader(path);
   final List<Uint8List> packets = <Uint8List>[];
-  await reader.readHeaders();
+  try {
+    await reader.readHeaders();
 
-  while (true) {
-    final OggPageResult page = await reader.parseNextPage();
-    if (page.error != null) {
-      break;
+    while (true) {
+      final OggPageResult page = await reader.parseNextPage();
+      if (page.error != null) {
+        expect(page.error, equals(OggReaderError.shortPageHeader));
+        break;
+      }
+
+      packets.addAll(
+        page.segments.where(
+          (Uint8List segment) =>
+              String.fromCharCodes(segment.take(8).toList()) != 'OpusTags',
+        ),
+      );
     }
-
-    if (page.segments.isNotEmpty &&
-        String.fromCharCodes(page.segments.first.take(8).toList()) ==
-            'OpusTags') {
-      continue;
-    }
-
-    packets.addAll(page.segments);
+  } finally {
+    await reader.close();
   }
-
-  await reader.close();
   return packets;
 }
 
@@ -149,9 +181,21 @@ int _computeOggPageCrc(Uint8List page) {
 
 Iterable<Uint8List> _iterateOggPages(Uint8List bytes) sync* {
   int offset = 0;
-  while (offset + pageHeaderLen <= bytes.length) {
+  while (offset < bytes.length) {
+    if (bytes.length - offset < pageHeaderLen) {
+      throw const FormatException('Truncated Ogg page header');
+    }
+    if (String.fromCharCodes(bytes.sublist(offset, offset + 4)) !=
+        pageHeaderSignature) {
+      throw const FormatException('Invalid Ogg page capture pattern');
+    }
+
     final int segmentCount = bytes[offset + 26];
     final int headerLength = pageHeaderLen + segmentCount;
+    if (offset + headerLength > bytes.length) {
+      throw const FormatException('Truncated Ogg page segment table');
+    }
+
     int bodyLength = 0;
     for (int i = 0; i < segmentCount; i++) {
       bodyLength += bytes[offset + pageHeaderLen + i];
@@ -159,7 +203,7 @@ Iterable<Uint8List> _iterateOggPages(Uint8List bytes) sync* {
 
     final int pageEnd = offset + headerLength + bodyLength;
     if (pageEnd > bytes.length) {
-      break;
+      throw const FormatException('Truncated Ogg page body');
     }
 
     yield bytes.sublist(offset, pageEnd);
@@ -204,36 +248,40 @@ void main() {
 
     test('converts OGG to CAF successfully', () async {
       const String inputFile = 'test_resources/test.ogg';
-      const String outputFile = 'test_resources/test_output.caf';
-      // Convert OGG to CAF
-      await oggCafConverter.convertOggToCaf(
-          input: inputFile, output: outputFile);
-      // Check if the output file exists
-      expect(File(outputFile).existsSync(), isTrue);
-      // Check if input file still exists
-      expect(File(inputFile).existsSync(), isTrue);
-      // Delete the output file after completing test
-      File(outputFile).deleteSync();
+      await _withTempDirectory('ogg-caf-success-', (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.caf');
+        await oggCafConverter.convertOggToCaf(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        final (_, _, Uint8List audioData) = await _readCafContents(outputFile);
+        expect(audioData, isNotEmpty);
+        expect(File(inputFile).existsSync(), isTrue);
+      });
     });
 
     test('preserves OGG trimming metadata in generated CAF', () async {
       const String inputFile = 'test_resources/test.ogg';
-      const String outputFile = 'test_resources/test_output.caf';
-      await oggCafConverter.convertOggToCaf(
-          input: inputFile, output: outputFile);
+      await _withTempDirectory('ogg-caf-trim-metadata-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.caf');
+        await oggCafConverter.convertOggToCaf(
+          input: inputFile,
+          output: outputFile,
+        );
 
-      final (AudioFormat audioFormat, PacketTable packetTable, Uint8List _) =
-          await _readCafContents(outputFile);
+        final (AudioFormat audioFormat, PacketTable packetTable, _) =
+            await _readCafContents(outputFile);
 
-      expect(audioFormat.sampleRate, equals(48000));
-      expect(audioFormat.framesPerPacket, equals(960));
-      expect(audioFormat.channelsPerPacket, equals(1));
-      expect(packetTable.header.numberPackets, equals(151));
-      expect(packetTable.header.numberValidFrames, equals(144000));
-      expect(packetTable.header.primingFrames, equals(312));
-      expect(packetTable.header.remainderFrames, equals(648));
-
-      File(outputFile).deleteSync();
+        expect(audioFormat.sampleRate, equals(48000));
+        expect(audioFormat.framesPerPacket, equals(960));
+        expect(audioFormat.channelsPerPacket, equals(1));
+        expect(packetTable.header.numberPackets, equals(151));
+        expect(packetTable.header.numberValidFrames, equals(144000));
+        expect(packetTable.header.primingFrames, equals(312));
+        expect(packetTable.header.remainderFrames, equals(648));
+      });
     });
 
     test('matches afconvert output for OGG to CAF', () async {
@@ -249,8 +297,8 @@ void main() {
 
       final Directory tempDir =
           await Directory.systemTemp.createTemp('ogg-caf-afconvert-');
-      final String libraryOutput = '${tempDir.path}/library.caf';
-      final String referenceOutput = '${tempDir.path}/reference.caf';
+      final String libraryOutput = _tempPath(tempDir, 'library.caf');
+      final String referenceOutput = _tempPath(tempDir, 'reference.caf');
 
       try {
         await oggCafConverter.convertOggToCaf(
@@ -300,9 +348,9 @@ void main() {
 
       final Directory tempDir =
           await Directory.systemTemp.createTemp('ogg-caf-variable-frames-');
-      final String inputFile = '${tempDir.path}/input.ogg';
-      final String outputFile = '${tempDir.path}/output.caf';
-      final String roundTripFile = '${tempDir.path}/roundtrip.ogg';
+      final String inputFile = _tempPath(tempDir, 'input.ogg');
+      final String outputFile = _tempPath(tempDir, 'output.caf');
+      final String roundTripFile = _tempPath(tempDir, 'roundtrip.ogg');
 
       try {
         await File(inputFile).writeAsBytes(ogg.encode());
@@ -346,8 +394,8 @@ void main() {
       );
       final Directory tempDir =
           await Directory.systemTemp.createTemp('ogg-caf-variable-trim-');
-      final String inputFile = '${tempDir.path}/input.ogg';
-      final String outputFile = '${tempDir.path}/output.caf';
+      final String inputFile = _tempPath(tempDir, 'input.ogg');
+      final String outputFile = _tempPath(tempDir, 'output.caf');
 
       try {
         await File(inputFile).writeAsBytes(ogg.encode());
@@ -373,38 +421,47 @@ void main() {
     });
 
     test('deletes input file after converting OGG to CAF', () async {
-      const String inputFile = 'test_resources/test_temp.ogg';
-      const String outputFile = 'test_resources/test_temp.caf';
-      // Create temporary input file for test
-      File('test_resources/test.ogg').copySync(inputFile);
-      // Convert OGG to CAF
-      await oggCafConverter.convertOggToCaf(
-        input: inputFile,
-        output: outputFile,
-        deleteInput: true,
-      );
-      // Check if the input file has been deleted
-      expect(File(inputFile).existsSync(), isFalse);
-      // Delete the output file after completing test
-      File(outputFile).deleteSync();
+      await _withTempDirectory('ogg-caf-delete-input-',
+          (Directory directory) async {
+        final String inputFile = _tempPath(directory, 'input.ogg');
+        final String outputFile = _tempPath(directory, 'output.caf');
+        await File('test_resources/test.ogg').copy(inputFile);
+        await oggCafConverter.convertOggToCaf(
+          input: inputFile,
+          output: outputFile,
+          deleteInput: true,
+        );
+
+        expect(File(inputFile).existsSync(), isFalse);
+        expect(File(outputFile).existsSync(), isTrue);
+      });
     });
 
-    test('throws exception for invalid OGG input file', () {
+    test('throws exception for invalid OGG input file', () async {
       const String inputFile = 'test_resources/invalid_ogg.opus';
-      const String outputFile = 'test_resources/test_temp.opus';
-      expect(
-          () => oggCafConverter.convertOggToCaf(
-              input: inputFile, output: outputFile),
-          throwsException);
+      await _withTempDirectory('ogg-caf-invalid-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.convertOggToCaf(
+            input: inputFile,
+            output: _tempPath(directory, 'output.caf'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
     });
 
-    test('throws exception for non-existent OGG file', () {
-      const String inputFile = 'test_resources/non_existent.opus';
-      const String outputFile = 'test_resources/test_temp.opus';
-      expect(
-          () => oggCafConverter.convertOggToCaf(
-              input: inputFile, output: outputFile),
-          throwsException);
+    test('throws exception for non-existent OGG file', () async {
+      await _withTempDirectory('ogg-caf-missing-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.convertOggToCaf(
+            input: _tempPath(directory, 'missing.ogg'),
+            output: _tempPath(directory, 'output.caf'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
     });
   });
 
@@ -438,98 +495,116 @@ void main() {
 
     test('converts CAF to OGG successfully', () async {
       const String inputFile = 'test_resources/test.caf';
-      const String outputFile = 'test_resources/test_output.ogg';
-      // Convert CAF to OGG
-      await oggCafConverter.convertCafToOgg(
-          input: inputFile, output: outputFile);
-      // Check if the output file exists
-      expect(File(outputFile).existsSync(), isTrue);
-      // Check if input file still exists
-      expect(File(inputFile).existsSync(), isTrue);
-      // Delete the output file after completing test
-      File(outputFile).deleteSync();
+      await _withTempDirectory('caf-ogg-success-', (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await oggCafConverter.convertCafToOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+
+        expect(await _readOggAudioPackets(outputFile), isNotEmpty);
+        expect(File(inputFile).existsSync(), isTrue);
+      });
     });
 
     test('preserves CAF trimming metadata in generated OGG', () async {
       const String inputFile = 'test_resources/test.caf';
-      const String outputFile = 'test_resources/test_output.ogg';
-      await oggCafConverter.convertCafToOgg(
-          input: inputFile, output: outputFile);
+      await _withTempDirectory('caf-ogg-trim-metadata-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await oggCafConverter.convertCafToOgg(
+          input: inputFile,
+          output: outputFile,
+        );
 
-      final OggReader reader = OggReader(outputFile);
-      final OggHeader headers = await reader.readHeaders();
-      expect(headers.preSkip, equals(312));
+        final OggReader reader = OggReader(outputFile);
+        try {
+          final OggHeader headers = await reader.readHeaders();
+          expect(headers.preSkip, equals(312));
 
-      final OggPageResult tagsPage = await reader.parseNextPage();
-      expect(tagsPage.pageHeader!.headerType, equals(0));
+          final OggPageResult tagsPage = await reader.parseNextPage();
+          expect(tagsPage.pageHeader!.headerType, equals(0));
 
-      final OggPageResult audioPage = await reader.parseNextPage();
-      expect(audioPage.pageHeader!.headerType, equals(0x04));
-      expect(audioPage.pageHeader!.granulePosition, equals(144312));
-
-      await reader.close();
-      File(outputFile).deleteSync();
+          final OggPageResult audioPage = await reader.parseNextPage();
+          expect(audioPage.pageHeader!.headerType, equals(0x04));
+          expect(audioPage.pageHeader!.granulePosition, equals(144312));
+        } finally {
+          await reader.close();
+        }
+      });
     });
 
     test('writes valid OGG CRC checksums', () async {
       const String inputFile = 'test_resources/test.caf';
-      const String outputFile = 'test_resources/test_output.ogg';
-      await oggCafConverter.convertCafToOgg(
-          input: inputFile, output: outputFile);
+      await _withTempDirectory('caf-ogg-crc-', (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await oggCafConverter.convertCafToOgg(
+          input: inputFile,
+          output: outputFile,
+        );
 
-      final Uint8List bytes = await File(outputFile).readAsBytes();
-      for (final Uint8List page in _iterateOggPages(bytes)) {
-        final int storedChecksum =
-            ByteData.sublistView(page, 22, 26).getUint32(0, Endian.little);
-        expect(_computeOggPageCrc(page), equals(storedChecksum));
-      }
-
-      File(outputFile).deleteSync();
+        final Uint8List bytes = await File(outputFile).readAsBytes();
+        final List<Uint8List> pages = _iterateOggPages(bytes).toList();
+        expect(pages, isNotEmpty);
+        for (final Uint8List page in pages) {
+          final int storedChecksum =
+              ByteData.sublistView(page, 22, 26).getUint32(0, Endian.little);
+          expect(_computeOggPageCrc(page), equals(storedChecksum));
+        }
+      });
     });
 
     test('writes internally consistent OGG page metadata', () async {
       const String inputFile = 'test_resources/test.caf';
-      const String outputFile = 'test_resources/test_output.ogg';
-      await oggCafConverter.convertCafToOgg(
-          input: inputFile, output: outputFile);
+      await _withTempDirectory('caf-ogg-page-metadata-',
+          (Directory directory) async {
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await oggCafConverter.convertCafToOgg(
+          input: inputFile,
+          output: outputFile,
+        );
+        _iterateOggPages(await File(outputFile).readAsBytes()).toList();
 
-      final OggReader reader = OggReader(outputFile);
-      await reader.readHeaders();
+        final OggReader reader = OggReader(outputFile);
+        try {
+          await reader.readHeaders();
 
-      int? serialNumber;
-      int? previousSequence;
-      int previousGranulePosition = 0;
-      OggPageHeader? lastHeader;
+          int? serialNumber;
+          int? previousSequence;
+          int previousGranulePosition = 0;
+          OggPageHeader? lastHeader;
 
-      while (true) {
-        final OggPageResult page = await reader.parseNextPage();
-        if (page.error != null) {
-          break;
+          while (true) {
+            final OggPageResult page = await reader.parseNextPage();
+            if (page.error != null) {
+              expect(page.error, equals(OggReaderError.shortPageHeader));
+              break;
+            }
+
+            final OggPageHeader header = page.pageHeader!;
+            serialNumber ??= header.serial;
+            expect(header.serial, equals(serialNumber));
+
+            if (previousSequence != null) {
+              expect(header.index, equals(previousSequence + 1));
+            }
+            previousSequence = header.index;
+
+            if (header.granulePosition != 0xFFFFFFFFFFFFFFFF) {
+              expect(header.granulePosition,
+                  greaterThanOrEqualTo(previousGranulePosition));
+              previousGranulePosition = header.granulePosition;
+            }
+
+            lastHeader = header;
+          }
+
+          expect(lastHeader, isNotNull);
+          expect((lastHeader!.headerType & 0x04) != 0, isTrue);
+        } finally {
+          await reader.close();
         }
-
-        final OggPageHeader header = page.pageHeader!;
-        serialNumber ??= header.serial;
-        expect(header.serial, equals(serialNumber));
-
-        if (previousSequence != null) {
-          expect(header.index, equals(previousSequence + 1));
-        }
-        previousSequence = header.index;
-
-        if (header.granulePosition != 0xFFFFFFFFFFFFFFFF) {
-          expect(header.granulePosition,
-              greaterThanOrEqualTo(previousGranulePosition));
-          previousGranulePosition = header.granulePosition;
-        }
-
-        lastHeader = header;
-      }
-
-      expect(lastHeader, isNotNull);
-      expect((lastHeader!.headerType & 0x04) != 0, isTrue);
-
-      await reader.close();
-      File(outputFile).deleteSync();
+      });
     });
 
     test('preserves CAF packets and trimmed audio with ffmpeg', () async {
@@ -541,7 +616,7 @@ void main() {
 
       final Directory tempDir =
           await Directory.systemTemp.createTemp('ogg-caf-ffmpeg-');
-      final String libraryOutput = '${tempDir.path}/library.ogg';
+      final String libraryOutput = _tempPath(tempDir, 'library.ogg');
       const String inputFile = 'test_resources/test.caf';
 
       try {
@@ -584,38 +659,47 @@ void main() {
     });
 
     test('deletes input file after converting CAF to OGG', () async {
-      const String inputFile = 'test_resources/test_temp.caf';
-      const String outputFile = 'test_resources/test_temp.ogg';
-      // Create temporary input file for test
-      File('test_resources/test.caf').copySync(inputFile);
-      // Convert CAF to OGG
-      await oggCafConverter.convertCafToOgg(
-        input: inputFile,
-        output: outputFile,
-        deleteInput: true,
-      );
-      // Check if the input file has been deleted
-      expect(File(inputFile).existsSync(), isFalse);
-      // Delete the output file after completing test
-      File(outputFile).deleteSync();
+      await _withTempDirectory('caf-ogg-delete-input-',
+          (Directory directory) async {
+        final String inputFile = _tempPath(directory, 'input.caf');
+        final String outputFile = _tempPath(directory, 'output.ogg');
+        await File('test_resources/test.caf').copy(inputFile);
+        await oggCafConverter.convertCafToOgg(
+          input: inputFile,
+          output: outputFile,
+          deleteInput: true,
+        );
+
+        expect(File(inputFile).existsSync(), isFalse);
+        expect(File(outputFile).existsSync(), isTrue);
+      });
     });
 
-    test('throws exception for invalid CAF input file', () {
+    test('throws exception for invalid CAF input file', () async {
       const String inputFile = 'test_resources/invalid_caf.opus';
-      const String outputFile = 'test_resources/test_temp.opus';
-      expect(
-          () => oggCafConverter.convertOggToCaf(
-              input: inputFile, output: outputFile),
-          throwsException);
+      await _withTempDirectory('caf-ogg-invalid-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.convertCafToOgg(
+            input: inputFile,
+            output: _tempPath(directory, 'output.ogg'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
     });
 
-    test('throws exception for non-existent CAF file', () {
-      const String inputFile = 'test_resources/non_existent.opus';
-      const String outputFile = 'test_resources/test_temp.opus';
-      expect(
-          () => oggCafConverter.convertCafToOgg(
-              input: inputFile, output: outputFile),
-          throwsException);
+    test('throws exception for non-existent CAF file', () async {
+      await _withTempDirectory('caf-ogg-missing-input-',
+          (Directory directory) async {
+        await expectLater(
+          oggCafConverter.convertCafToOgg(
+            input: 'test_resources/non_existent.caf',
+            output: _tempPath(directory, 'output.ogg'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+      });
     });
   });
 
@@ -632,16 +716,16 @@ void main() {
 
     test('throws exception for invalid CAF input file', () async {
       const String inputFile = 'test_resources/invalid_caf.opus';
-      expect(
-        () async => oggCafConverter.convertCafToOggInMemory(input: inputFile),
+      await expectLater(
+        oggCafConverter.convertCafToOggInMemory(input: inputFile),
         throwsA(isA<Exception>()),
       );
     });
 
     test('throws exception for non-existent CAF file', () async {
       const String inputFile = 'test_resources/non_existent.caf';
-      expect(
-        () async => oggCafConverter.convertCafToOggInMemory(input: inputFile),
+      await expectLater(
+        oggCafConverter.convertCafToOggInMemory(input: inputFile),
         throwsA(isA<Exception>()),
       );
     });
@@ -660,16 +744,16 @@ void main() {
 
     test('throws exception for invalid OGG input file', () async {
       const String inputFile = 'test_resources/invalid_ogg.opus';
-      expect(
-        () async => oggCafConverter.convertOggToCafInMemory(input: inputFile),
+      await expectLater(
+        oggCafConverter.convertOggToCafInMemory(input: inputFile),
         throwsA(isA<Exception>()),
       );
     });
 
     test('throws exception for non-existent OGG file', () async {
       const String inputFile = 'test_resources/non_existent.ogg';
-      expect(
-        () async => oggCafConverter.convertOggToCafInMemory(input: inputFile),
+      await expectLater(
+        oggCafConverter.convertOggToCafInMemory(input: inputFile),
         throwsA(isA<Exception>()),
       );
     });

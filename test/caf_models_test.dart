@@ -21,6 +21,11 @@ void main() {
       expect(fourByteString.bytes, equals(<int>[0, 0, 0, 0]));
     });
 
+    test('defaults when four characters encode to more than four bytes', () {
+      final FourByteString fourByteString = FourByteString('éabc');
+      expect(fourByteString.bytes, equals(<int>[0, 0, 0, 0]));
+    });
+
     test('compares equal FourByteStrings correctly', () {
       final FourByteString fourByteString1 = FourByteString('test');
       final FourByteString fourByteString2 = FourByteString('test');
@@ -33,9 +38,11 @@ void main() {
       expect(fourByteString1, isNot(equals(fourByteString2)));
     });
 
-    test('hashCode returns correct value', () {
-      final FourByteString fourByteString = FourByteString('test');
-      expect(fourByteString.hashCode, equals(fourByteString.bytes.hashCode));
+    test('equal FourByteStrings have equal hash codes', () {
+      final FourByteString first = FourByteString('test');
+      final FourByteString second = FourByteString('test');
+      expect(first, equals(second));
+      expect(first.hashCode, equals(second.hashCode));
     });
   });
 
