@@ -11,10 +11,10 @@ import 'utils/logger.dart';
 class OggCafConverter {
   /// Converts OPUS audio data from OGG to CAF container format and saves it to the specified output path.
   ///
-  /// [inputFile] is the path to the OPUS audio file in OGG container to be converted.
+  /// [input] is the path to the OPUS audio file in OGG container to be converted.
   /// Must have read access to this file path.
   ///
-  /// [outputPath] is the path where the resulting OPUS audio file in CAF container will be saved.
+  /// [output] is the path where the resulting OPUS audio file in CAF container will be saved.
   /// Must have write access to this file path.
   ///
   /// [deleteInput] specifies whether the input file should be deleted after conversion.
@@ -24,11 +24,7 @@ class OggCafConverter {
     required String output,
     bool deleteInput = false,
   }) async {
-    try {
-      await _convertOggToCaf(input, output, deleteInput);
-    } catch (e) {
-      throw Exception(e);
-    }
+    await _convertOggToCaf(input, output, deleteInput);
   }
 
   Future<void> _convertOggToCaf(
@@ -39,27 +35,54 @@ class OggCafConverter {
       final File file = File(outputPath);
 
       if (!file.existsSync()) {
-        await file.create();
+        await file.create(recursive: true);
       }
 
       // Write CAF file to output path
       await file.writeAsBytes(encodedData);
 
       if (deleteInput) {
-        await File(inputFile).delete();
+        bool isSameFile = inputFile == outputPath;
+        if (!isSameFile) {
+          try {
+            isSameFile = FileSystemEntity.identicalSync(inputFile, outputPath);
+          } catch (_) {}
+        }
+        if (!isSameFile) {
+          await File(inputFile).delete();
+        }
       }
     } catch (e, stackTrace) {
       log('Error converting OGG to CAF: $e');
       log(stackTrace.toString());
-
-      throw Exception(e);
+      rethrow;
     }
   }
 
+  /// Converts OPUS audio data from OGG to CAF container format and returns the bytes in memory as a Uint8List.
+  ///
+  /// [input] is the path to the OPUS audio file in OGG container to be converted.
+  Future<Uint8List> convertOggToCafInMemory({
+    required String input,
+  }) async {
+    return _readOggToCafMemory(input);
+  }
+
   Future<Uint8List> _readOggToCafMemory(String inputFile) async {
-    late final OggReader ogg;
     try {
-      ogg = OggReader(inputFile);
+      final Uint8List bytes = await File(inputFile).readAsBytes();
+      return await convertOggBytesToCaf(bytes);
+    } catch (e, stackTrace) {
+      log('Error converting OGG to CAF: $e');
+      log(stackTrace.toString());
+      rethrow;
+    }
+  }
+
+  /// Converts OPUS audio data from OGG bytes to CAF bytes in memory.
+  Future<Uint8List> convertOggBytesToCaf(Uint8List bytes) async {
+    final OggReader ogg = OggReader.fromBytes(bytes);
+    try {
       final OggHeader header = await ogg.readHeaders();
       final OpusData opusData = await ogg.readOpusData();
 
@@ -79,35 +102,20 @@ class OggCafConverter {
 
       return cf.encode();
     } catch (e, stackTrace) {
-      log('Error converting OGG to CAF: $e');
+      log('Error converting OGG bytes to CAF: $e');
       log(stackTrace.toString());
-
-      throw Exception(e);
+      rethrow;
     } finally {
-      // Close input file
       await ogg.close();
-    }
-  }
-
-  /// Converts OPUS audio data from OGG to CAF container format and returns the bytes in memory as a Uint8List.
-  ///
-  /// [inputFile] is the path to the OPUS audio file in OGG container to be converted.
-  Future<Uint8List> convertOggToCafInMemory({
-    required String input,
-  }) async {
-    try {
-      return await _readOggToCafMemory(input);
-    } catch (e) {
-      throw Exception(e);
     }
   }
 
   /// Converts OPUS audio data from CAF to OGG container format and saves it to the specified output path.
   ///
-  /// [inputFile] is the path to the OPUS audio file in CAF container to be converted.
+  /// [input] is the path to the OPUS audio file in CAF container to be converted.
   /// Must have read access to this file path.
   ///
-  /// [outputPath] is the path where the resulting OPUS audio file in OGG container will be saved.
+  /// [output] is the path where the resulting OPUS audio file in OGG container will be saved.
   /// Must have write access to this file path.
   ///
   /// [deleteInput] specifies whether the input file should be deleted after conversion.
@@ -117,11 +125,7 @@ class OggCafConverter {
     required String output,
     bool deleteInput = false,
   }) async {
-    try {
-      await _convertCafToOgg(input, output, deleteInput);
-    } catch (e) {
-      throw Exception(e);
-    }
+    await _convertCafToOgg(input, output, deleteInput);
   }
 
   Future<void> _convertCafToOgg(
@@ -132,26 +136,54 @@ class OggCafConverter {
       final File file = File(outputPath);
 
       if (!file.existsSync()) {
-        await file.create();
+        await file.create(recursive: true);
       }
 
       // Write OGG file to output path
       await file.writeAsBytes(encodedData);
 
       if (deleteInput) {
-        await File(inputFile).delete();
+        bool isSameFile = inputFile == outputPath;
+        if (!isSameFile) {
+          try {
+            isSameFile = FileSystemEntity.identicalSync(inputFile, outputPath);
+          } catch (_) {}
+        }
+        if (!isSameFile) {
+          await File(inputFile).delete();
+        }
       }
     } catch (e, stackTrace) {
       log('Error converting CAF to OGG: $e');
       log(stackTrace.toString());
-      throw Exception(e);
+      rethrow;
     }
+  }
+
+  /// Converts OPUS audio data from CAF to OGG container format and returns the bytes in memory as a Uint8List.
+  ///
+  /// [input] is the path to the OPUS audio file in CAF container to be converted.
+  Future<Uint8List> convertCafToOggInMemory({
+    required String input,
+  }) async {
+    return _convertCafToOggInMemory(input);
   }
 
   Future<Uint8List> _convertCafToOggInMemory(String inputFile) async {
     try {
-      final CafReader caf = CafReader(inputFile);
       final Uint8List bytes = await File(inputFile).readAsBytes();
+      return convertCafBytesToOgg(bytes);
+    } catch (e, stackTrace) {
+      log('Error converting CAF to OGG: $e');
+      log(stackTrace.toString());
+      rethrow;
+    }
+  }
+
+  /// Converts OPUS audio data from CAF bytes to OGG bytes in memory.
+  Uint8List convertCafBytesToOgg(Uint8List bytes) {
+    try {
+      final CafReader caf = CafReader();
       final AudioFormat audioFormat = caf.readAudioFormat(bytes);
       final Uint8List audioData = caf.readAudioData(bytes);
       final PacketTable packetTable =
@@ -181,22 +213,9 @@ class OggCafConverter {
 
       return ogg.encode();
     } catch (e, stackTrace) {
-      log('Error converting CAF to OGG: $e');
+      log('Error converting CAF bytes to OGG: $e');
       log(stackTrace.toString());
-      throw Exception(e);
-    }
-  }
-
-  /// Converts OPUS audio data from CAF to OGG container format and returns the bytes in memory as a Uint8List.
-  ///
-  /// [inputFile] is the path to the OPUS audio file in CAF container to be converted.
-  Future<Uint8List> convertCafToOggInMemory({
-    required String input,
-  }) async {
-    try {
-      return await _convertCafToOggInMemory(input);
-    } catch (e) {
-      throw Exception(e);
+      rethrow;
     }
   }
 
@@ -215,11 +234,7 @@ class OggCafConverter {
     required String output,
     bool deleteInput = false,
   }) async {
-    try {
-      await _repackageOgg(input, output, deleteInput);
-    } catch (e) {
-      throw Exception(e);
-    }
+    await _repackageOgg(input, output, deleteInput);
   }
 
   Future<void> _repackageOgg(
@@ -250,7 +265,7 @@ class OggCafConverter {
     } catch (e, stackTrace) {
       log('Error repackaging OGG: $e');
       log(stackTrace.toString());
-      throw Exception(e);
+      rethrow;
     }
   }
 
@@ -260,17 +275,24 @@ class OggCafConverter {
   Future<Uint8List> repackageOggInMemory({
     required String input,
   }) async {
-    try {
-      return await _repackageOggInMemory(input);
-    } catch (e) {
-      throw Exception(e);
-    }
+    return _repackageOggInMemory(input);
   }
 
   Future<Uint8List> _repackageOggInMemory(String inputFile) async {
-    late final OggReader ogg;
     try {
-      ogg = OggReader(inputFile);
+      final Uint8List bytes = await File(inputFile).readAsBytes();
+      return await repackageOggBytes(bytes);
+    } catch (e, stackTrace) {
+      log('Error repackaging OGG: $e');
+      log(stackTrace.toString());
+      rethrow;
+    }
+  }
+
+  /// Repackages OPUS audio from OGG bytes to OGG bytes in memory.
+  Future<Uint8List> repackageOggBytes(Uint8List bytes) async {
+    final OggReader ogg = OggReader.fromBytes(bytes);
+    try {
       final OggHeader header = await ogg.readHeaders();
       final OpusData opusData = await ogg.readOpusData();
 
@@ -293,9 +315,9 @@ class OggCafConverter {
 
       return newOgg.encode();
     } catch (e, stackTrace) {
-      log('Error repackaging OGG: $e');
+      log('Error repackaging OGG bytes: $e');
       log(stackTrace.toString());
-      throw Exception(e);
+      rethrow;
     } finally {
       await ogg.close();
     }
@@ -371,9 +393,10 @@ class OggCafConverter {
     Uint8List createOpusTagsPacket() {
       final List<int> packet = <int>[];
       packet.addAll(utf8.encode('OpusTags')); // Signature
-      packet.addAll(_encodeUint32(
-          utf8.encode('Revival Apps').length)); // Vendor string length
-      packet.addAll(utf8.encode('Revival Apps')); // Vendor string
+      final List<int> vendorBytes =
+          utf8.encode('Revival Apps ogg_caf_converter');
+      packet.addAll(_encodeUint32(vendorBytes.length)); // Vendor string length
+      packet.addAll(vendorBytes); // Vendor string
       packet.addAll(_encodeUint32(0)); // User comment list length
       return Uint8List.fromList(packet);
     }
@@ -407,7 +430,8 @@ class OggCafConverter {
       serialNumber: serialNumber,
       pageSequenceNumber: pageSequenceNumber,
       segments: Uint8List.fromList(<int>[opusTagsPacket.length]),
-      headerType: 0x00, // Normal page, no continuation
+      headerType:
+          packets.isEmpty ? 0x04 : 0x00, // EOS if there are no audio packets
     );
     crc = calculateChecksum(header, opusTagsPacket);
     header.setRange(22, 26, _encodeUint32(crc));
@@ -500,11 +524,15 @@ class OggCafConverter {
   }) {
     // Opus granule positions and trim values are always counted at 48 kHz
     // (RFC 7845 §3.2). Scale frame counts from the input sample rate to 48 kHz.
-    if (sampleRate <= 0 || 48000 % sampleRate != 0) {
+    if (sampleRate <= 0) {
       throw Exception('Unsupported Opus sample rate: $sampleRate');
     }
 
-    return frameCount * (48000 ~/ sampleRate);
+    if (sampleRate == 48000) {
+      return frameCount;
+    }
+
+    return (frameCount * 48000 / sampleRate).round();
   }
 
   Uint8List _encodeUint64(int value) {
@@ -648,10 +676,10 @@ class OggCafConverter {
 
 /// A class for reading CAF files.
 class CafReader {
-  CafReader(this.filePath);
+  CafReader([this.filePath]);
 
-  /// The path to the CAF file.
-  final String filePath;
+  /// The path to the CAF file (optional).
+  final String? filePath;
 
   /// Reads the audio data from the CAF file.
   Uint8List readAudioData(Uint8List bytes) {
@@ -661,12 +689,10 @@ class CafReader {
     final String fileType = utf8.decode(bytes.sublist(offset, offset + 4));
     offset += 4;
     final int fileVersion =
-        ByteData.sublistView(Uint8List.fromList(bytes), offset, offset + 2)
-            .getUint16(0);
+        ByteData.sublistView(bytes, offset, offset + 2).getUint16(0);
     offset += 2;
     final int fileFlags =
-        ByteData.sublistView(Uint8List.fromList(bytes), offset, offset + 2)
-            .getUint16(0);
+        ByteData.sublistView(bytes, offset, offset + 2).getUint16(0);
     offset += 2;
 
     log('File type: $fileType, File version: $fileVersion, File flags: $fileFlags');
@@ -674,9 +700,8 @@ class CafReader {
     while (offset < bytes.length) {
       // Read chunk header
       final String chunkType = utf8.decode(bytes.sublist(offset, offset + 4));
-      final int chunkSize = ByteData.sublistView(
-              Uint8List.fromList(bytes), offset + 4, offset + 12)
-          .getUint64(0);
+      final int chunkSize =
+          ByteData.sublistView(bytes, offset + 4, offset + 12).getUint64(0);
       offset += 12; // Move past the chunk header
 
       log('Chunk type: $chunkType, Chunk size: $chunkSize');
@@ -684,8 +709,7 @@ class CafReader {
       if (chunkType == 'data') {
         // We found the audio data chunk
         final int editCount =
-            ByteData.sublistView(Uint8List.fromList(bytes), offset, offset + 4)
-                .getUint32(0);
+            ByteData.sublistView(bytes, offset, offset + 4).getUint32(0);
         offset += 4;
 
         final Uint8List audioData = bytes.sublist(offset,
@@ -708,9 +732,8 @@ class CafReader {
     while (offset < bytes.length) {
       // Read chunk header
       final String chunkType = utf8.decode(bytes.sublist(offset, offset + 4));
-      final int chunkSize = ByteData.sublistView(
-              Uint8List.fromList(bytes), offset + 4, offset + 12)
-          .getUint64(0);
+      final int chunkSize =
+          ByteData.sublistView(bytes, offset + 4, offset + 12).getUint64(0);
       offset += 12; // Move past the chunk header
 
       if (chunkType == 'pakt') {
@@ -719,17 +742,13 @@ class CafReader {
             bytes.sublist(offset, offset + chunkSize);
 
         final int numberPackets =
-            ByteData.sublistView(Uint8List.fromList(packetTableBytes), 0, 8)
-                .getUint64(0);
+            ByteData.sublistView(packetTableBytes, 0, 8).getUint64(0);
         final int numberValidFrames =
-            ByteData.sublistView(Uint8List.fromList(packetTableBytes), 8, 16)
-                .getUint64(0);
+            ByteData.sublistView(packetTableBytes, 8, 16).getUint64(0);
         final int primingFrames =
-            ByteData.sublistView(Uint8List.fromList(packetTableBytes), 16, 20)
-                .getUint32(0);
+            ByteData.sublistView(packetTableBytes, 16, 20).getUint32(0);
         final int remainderFrames =
-            ByteData.sublistView(Uint8List.fromList(packetTableBytes), 20, 24)
-                .getUint32(0);
+            ByteData.sublistView(packetTableBytes, 20, 24).getUint32(0);
         final _DecodedPacketTableEntries decodedEntries =
             _decodePacketTableEntries(
           packetTableBytes.sublist(24),
@@ -836,9 +855,8 @@ class CafReader {
     while (offset < bytes.length) {
       // Read chunk header
       final String chunkType = utf8.decode(bytes.sublist(offset, offset + 4));
-      final int chunkSize = ByteData.sublistView(
-              Uint8List.fromList(bytes), offset + 4, offset + 12)
-          .getUint64(0);
+      final int chunkSize =
+          ByteData.sublistView(bytes, offset + 4, offset + 12).getUint64(0);
       offset += 12; // Move past the chunk header
 
       log('Chunk type: $chunkType, Chunk size: $chunkSize');
@@ -848,25 +866,19 @@ class CafReader {
         final Uint8List formatBytes = bytes.sublist(offset, offset + chunkSize);
 
         final double sampleRate =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 0, 8)
-                .getFloat64(0);
+            ByteData.sublistView(formatBytes, 0, 8).getFloat64(0);
         final FourByteString formatID =
-            FourByteString(utf8.decode(formatBytes.sublist(8, 12)));
+            FourByteString.fromBytes(formatBytes.sublist(8, 12));
         final int formatFlags =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 12, 16)
-                .getUint32(0);
+            ByteData.sublistView(formatBytes, 12, 16).getUint32(0);
         final int bytesPerPacket =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 16, 20)
-                .getUint32(0);
+            ByteData.sublistView(formatBytes, 16, 20).getUint32(0);
         final int framesPerPacket =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 20, 24)
-                .getUint32(0);
+            ByteData.sublistView(formatBytes, 20, 24).getUint32(0);
         final int channelsPerFrame =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 24, 28)
-                .getUint32(0);
+            ByteData.sublistView(formatBytes, 24, 28).getUint32(0);
         final int bitsPerChannel =
-            ByteData.sublistView(Uint8List.fromList(formatBytes), 28, 32)
-                .getUint32(0);
+            ByteData.sublistView(formatBytes, 28, 32).getUint32(0);
 
         log('Audio format chunk found at offset $offset with size $chunkSize');
         log('sampleRate: $sampleRate formatID: $formatID formatFlags: $formatFlags bytesPerPacket: $bytesPerPacket framesPerPacket: $framesPerPacket channelsPerFrame: $channelsPerFrame bitsPerChannel: $bitsPerChannel');

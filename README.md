@@ -71,8 +71,12 @@ Both conversion functions take the following parameters:
 - `output`: The path to the output file (must have write access to this file path).
 - `deleteInput`: Whether to delete the input file after successful conversion. Defaults to `false`.
 
-For in-memory conversion without creating a new file, use `convertOggToCafInMemory()` and 
+For in-memory conversion from a file path without creating a new file, use `convertOggToCafInMemory()` and 
 `convertCafToOggInMemory()`. Both return a `Uint8List` of the converted audio file bytes.
+
+If you already have audio bytes in memory (e.g. from network or audio record buffers), you can convert bytes directly without any filesystem operations:
+- `convertOggBytesToCaf(Uint8List bytes)`: Converts OGG Opus bytes to CAF bytes.
+- `convertCafBytesToOgg(Uint8List bytes)`: Converts CAF Opus bytes to standard OGG Opus bytes.
 
 ### Repackaging OGG Files
 
@@ -82,7 +86,8 @@ players from seeking accurately or calculating stream duration correctly.
 
 To repair and repackage an OGG file without re-encoding audio:
 - `repackageOgg()`: Reads the input OGG Opus file, strips non-standard framing, recalculates accurate 48 kHz granule positions for every packet, writes canonical `OpusHead` and `OpusTags` pages with valid CRC-32 checksums, and saves to `output`. In-place repackaging (`input == output`) is supported safely.
-- `repackageOggInMemory()`: Performs the same container sanitization and returns the resulting OGG bytes as a `Uint8List`.
+- `repackageOggInMemory()`: Performs the same container sanitization on a file and returns the resulting OGG bytes as a `Uint8List`.
+- `repackageOggBytes(Uint8List bytes)`: Performs container sanitization directly on in-memory OGG bytes without any filesystem operations.
 
 ## Example
 
@@ -151,6 +156,16 @@ void main() async {
     final Uint8List sanitizedBytes = await converter.repackageOggInMemory(
       input: inputOgg,
     );
+  } catch (e) {
+    // Handle error
+  }
+
+  // Pure in-memory byte conversions (no filesystem access)
+  try {
+    final Uint8List rawOggBytes = Uint8List(0); // your OGG bytes
+    final Uint8List convertedCaf = await converter.convertOggBytesToCaf(rawOggBytes);
+    final Uint8List convertedOgg = converter.convertCafBytesToOgg(convertedCaf);
+    final Uint8List repackagedBytes = await converter.repackageOggBytes(rawOggBytes);
   } catch (e) {
     // Handle error
   }

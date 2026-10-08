@@ -44,6 +44,24 @@ void main() {
       expect(first, equals(second));
       expect(first.hashCode, equals(second.hashCode));
     });
+
+    test('creates FourByteString from bytes correctly', () {
+      final FourByteString fourByte = FourByteString.fromBytes(
+          Uint8List.fromList(<int>[111, 112, 117, 115]));
+      expect(fourByte.bytes, equals(<int>[111, 112, 117, 115]));
+      expect(fourByte.toString(), equals('opus'));
+      expect(fourByte, equals(FourByteString('opus')));
+    });
+
+    test('creates default FourByteString from bytes when length != 4', () {
+      final FourByteString shortBytes =
+          FourByteString.fromBytes(Uint8List.fromList(<int>[1, 2, 3]));
+      expect(shortBytes.bytes, equals(<int>[0, 0, 0, 0]));
+
+      final FourByteString longBytes =
+          FourByteString.fromBytes(Uint8List.fromList(<int>[1, 2, 3, 4, 5]));
+      expect(longBytes.bytes, equals(<int>[0, 0, 0, 0]));
+    });
   });
 
   group('ChunkHeader', () {

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 /// Beginning of stream type for the Ogg page header.
@@ -188,20 +189,46 @@ class OggPageHeader {
 
 /// Class for reading and parsing Ogg files.
 class OggReader {
-  OggReader(String filePath) {
-    final File file = File(filePath);
-    raFile = file.openSync();
+  /// Creates an [OggReader] that reads from a file path.
+  OggReader(this.filePath)
+      : _bytes = null,
+        raFile = File(filePath).openSync();
+
+  /// Creates an [OggReader] that reads from an in-memory byte buffer.
+  OggReader.fromBytes(Uint8List bytes)
+      : filePath = '',
+        raFile = null,
+        _bytes = bytes;
+
+  /// Path to the Ogg file, or empty string if reading from memory.
+  final String filePath;
+
+  /// Random access file for the Ogg file (null if reading from memory).
+  RandomAccessFile? raFile;
+
+  final Uint8List? _bytes;
+  int _byteOffset = 0;
+
+  Future<int> _readInto(List<int> buffer) async {
+    if (raFile != null) {
+      return raFile!.readInto(buffer);
+    } else if (_bytes != null) {
+      if (_byteOffset >= _bytes!.length) {
+        return 0;
+      }
+      final int available = min(buffer.length, _bytes!.length - _byteOffset);
+      buffer.setRange(
+          0, available, _bytes!.sublist(_byteOffset, _byteOffset + available));
+      _byteOffset += available;
+      return available;
+    }
+    return 0;
   }
-
-  /// Path to the Ogg file.
-  late String filePath;
-
-  /// Random access file for the Ogg file.
-  late RandomAccessFile? raFile;
 
   /// Closes the Ogg file.
   Future<void> close() async {
     await raFile?.close();
+    raFile = null;
   }
 
   /// Reads the headers from the Ogg file.
@@ -217,7 +244,7 @@ class OggReader {
     }
 
     if (pageHeader == null) {
-      throw Exception(err);
+      throw Exception(err ?? 'Missing page header');
     }
 
     if (utf8.decode(pageHeader.sig) != pageHeaderSignature) {
@@ -236,25 +263,25 @@ class OggReader {
         sampleRate: 0,
         version: 0);
 
-    if (segments[0].length != idPagePayloadLength) {
+    if (segments.isEmpty || segments[0].length != idPagePayloadLength) {
       throw Exception(OggReaderError.badIDPageLength);
     }
 
-    if (utf8.decode(segments[0].sublist(0, 8)) != idPageSignature) {
+    if (segments[0].length < 8 ||
+        utf8.decode(segments[0].sublist(0, 8), allowMalformed: true) !=
+            idPageSignature) {
       throw Exception(OggReaderError.badIDPagePayloadSignature);
     }
 
     header
       ..version = segments[0][8]
       ..channels = segments[0][9]
-      ..preSkip = ByteData.sublistView(Uint8List.fromList(segments[0]), 10, 12)
-          .getUint16(0, Endian.little)
+      ..preSkip =
+          ByteData.sublistView(segments[0], 10, 12).getUint16(0, Endian.little)
       ..sampleRate =
-          ByteData.sublistView(Uint8List.fromList(segments[0]), 12, 16)
-              .getUint32(0, Endian.little)
+          ByteData.sublistView(segments[0], 12, 16).getUint32(0, Endian.little)
       ..outputGain =
-          ByteData.sublistView(Uint8List.fromList(segments[0]), 16, 18)
-              .getUint16(0, Endian.little)
+          ByteData.sublistView(segments[0], 16, 18).getUint16(0, Endian.little)
       ..channelMap = segments[0][18];
 
     return header;
@@ -328,7 +355,7 @@ class OggReader {
   Future<OggPageResult> parseNextPage() async {
     final Uint8List h = Uint8List(pageHeaderLen);
 
-    final int bytesRead = await raFile?.readInto(h) ?? 0;
+    final int bytesRead = await _readInto(h);
     if (bytesRead < pageHeaderLen) {
       return OggPageResult(
           segments: <Uint8List>[], error: OggReaderError.shortPageHeader);
@@ -355,7 +382,11 @@ class OggReader {
       ..segmentsCount = h[26];
 
     final List<int> sizeBuffer = List<int>.filled(pageHeader.segmentsCount, 0);
-    await raFile?.readInto(sizeBuffer);
+    final int sizeBytesRead = await _readInto(sizeBuffer);
+    if (sizeBytesRead < sizeBuffer.length) {
+      return OggPageResult(
+          segments: <Uint8List>[], error: OggReaderError.shortPageHeader);
+    }
 
     final List<int> newArr = <int>[];
     int i = 0;
@@ -381,7 +412,11 @@ class OggReader {
 
     for (final int s in newArr) {
       final List<int> segment = List<int>.filled(s, 0);
-      await raFile?.readInto(segment);
+      final int segmentBytesRead = await _readInto(segment);
+      if (segmentBytesRead < s) {
+        return OggPageResult(
+            segments: <Uint8List>[], error: OggReaderError.shortPageHeader);
+      }
       segments.add(Uint8List.fromList(segment));
     }
 

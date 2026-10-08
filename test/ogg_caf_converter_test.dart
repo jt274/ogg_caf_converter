@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -1221,6 +1222,263 @@ void main() {
         () => CafReader('unused').readPacketTable(malformedBytes),
         throwsException,
       );
+    });
+  });
+
+  group('Byte-level converters', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('convertCafBytesToOgg converts CAF bytes in memory', () async {
+      final Uint8List cafBytes =
+          await File('test_resources/test.caf').readAsBytes();
+      final Uint8List oggBytes = oggCafConverter.convertCafBytesToOgg(cafBytes);
+      expect(oggBytes, isNotEmpty);
+
+      final OggReader reader = OggReader.fromBytes(oggBytes);
+      try {
+        final OggHeader header = await reader.readHeaders();
+        expect(header.channels, equals(1));
+        expect(header.preSkip, equals(312));
+        final OpusData opusData = await reader.readOpusData();
+        expect(opusData.audioData, isNotEmpty);
+      } finally {
+        await reader.close();
+      }
+    });
+
+    test('convertOggBytesToCaf converts OGG bytes in memory', () async {
+      final Uint8List oggBytes =
+          await File('test_resources/test.ogg').readAsBytes();
+      final Uint8List cafBytes =
+          await oggCafConverter.convertOggBytesToCaf(oggBytes);
+      expect(cafBytes, isNotEmpty);
+
+      final CafReader reader = CafReader();
+      final AudioFormat format = reader.readAudioFormat(cafBytes);
+      expect(format.channelsPerPacket, equals(1));
+      expect(format.formatID, equals(FourByteString('opus')));
+      final Uint8List audioData = reader.readAudioData(cafBytes);
+      expect(audioData, isNotEmpty);
+    });
+
+    test('repackageOggBytes repackages OGG bytes in memory', () async {
+      final Uint8List oggBytes =
+          await File('test_resources/test.ogg').readAsBytes();
+      final Uint8List repackagedBytes =
+          await oggCafConverter.repackageOggBytes(oggBytes);
+      expect(repackagedBytes, isNotEmpty);
+
+      final OggReader reader = OggReader.fromBytes(repackagedBytes);
+      try {
+        final OggHeader header = await reader.readHeaders();
+        expect(header.channels, equals(1));
+        final OpusData opusData = await reader.readOpusData();
+        expect(opusData.audioData, isNotEmpty);
+      } finally {
+        await reader.close();
+      }
+    });
+  });
+
+  group('OpusTags vendor string', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test(
+        'writes vendor string "Revival Apps ogg_caf_converter" when building OGG',
+        () async {
+      final Uint8List cafBytes =
+          await File('test_resources/test.caf').readAsBytes();
+      final Uint8List oggBytes = oggCafConverter.convertCafBytesToOgg(cafBytes);
+
+      final OggReader reader = OggReader.fromBytes(oggBytes);
+      try {
+        await reader.readHeaders(); // page 0
+        final OggPageResult tagsPage = await reader.parseNextPage(); // page 1
+        expect(tagsPage.segments, isNotEmpty);
+        final Uint8List payload = tagsPage.segments.first;
+        expect(utf8.decode(payload.sublist(0, 8)), equals('OpusTags'));
+        final int vendorLength =
+            ByteData.sublistView(payload, 8, 12).getUint32(0, Endian.little);
+        final String vendor =
+            utf8.decode(payload.sublist(12, 12 + vendorLength));
+        expect(vendor, equals('Revival Apps ogg_caf_converter'));
+      } finally {
+        await reader.close();
+      }
+    });
+  });
+
+  group('Recursive output directory creation', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('convertOggToCaf creates nested output directories', () async {
+      await _withTempDirectory('nested-ogg-caf-', (Directory directory) async {
+        final String nestedOut =
+            '${directory.path}/deep/nested/path/output.caf';
+        await oggCafConverter.convertOggToCaf(
+          input: 'test_resources/test.ogg',
+          output: nestedOut,
+        );
+        expect(File(nestedOut).existsSync(), isTrue);
+      });
+    });
+
+    test('convertCafToOgg creates nested output directories', () async {
+      await _withTempDirectory('nested-caf-ogg-', (Directory directory) async {
+        final String nestedOut =
+            '${directory.path}/deep/nested/path/output.ogg';
+        await oggCafConverter.convertCafToOgg(
+          input: 'test_resources/test.caf',
+          output: nestedOut,
+        );
+        expect(File(nestedOut).existsSync(), isTrue);
+      });
+    });
+
+    test('repackageOgg creates nested output directories', () async {
+      await _withTempDirectory('nested-repackage-',
+          (Directory directory) async {
+        final String nestedOut =
+            '${directory.path}/deep/nested/path/output.ogg';
+        await oggCafConverter.repackageOgg(
+          input: 'test_resources/test.ogg',
+          output: nestedOut,
+        );
+        expect(File(nestedOut).existsSync(), isTrue);
+      });
+    });
+  });
+
+  group('Safe in-place deleteInput', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('convertOggToCaf does not delete output when input equals output',
+        () async {
+      await _withTempDirectory('inplace-ogg-caf-', (Directory directory) async {
+        final String filePath = _tempPath(directory, 'audio.caf');
+        await File('test_resources/test.ogg').copy(filePath);
+        await oggCafConverter.convertOggToCaf(
+          input: filePath,
+          output: filePath,
+          deleteInput: true,
+        );
+        expect(File(filePath).existsSync(), isTrue);
+      });
+    });
+
+    test('convertCafToOgg does not delete output when input equals output',
+        () async {
+      await _withTempDirectory('inplace-caf-ogg-', (Directory directory) async {
+        final String filePath = _tempPath(directory, 'audio.ogg');
+        await File('test_resources/test.caf').copy(filePath);
+        await oggCafConverter.convertCafToOgg(
+          input: filePath,
+          output: filePath,
+          deleteInput: true,
+        );
+        expect(File(filePath).existsSync(), isTrue);
+      });
+    });
+  });
+
+  group('Empty stream handling', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('sets EOS flag on OpusTags page when packet table is empty', () {
+      final OggFile ogg = oggCafConverter.buildOggFile(
+        audioData: Uint8List(0),
+        packetTable: <int>[],
+        channels: 1,
+        preSkip: 0,
+        sampleRate: 48000,
+        version: 1,
+        frameSize: 960,
+        repackage: false,
+      );
+
+      expect(ogg.pages.length, equals(2));
+      // Page 0 is OpusHead (headerType 0x02 BOS)
+      expect(ogg.pages[0].header[5], equals(0x02));
+      // Page 1 is OpusTags (headerType 0x04 EOS because packets.isEmpty)
+      expect(ogg.pages[1].header[5], equals(0x04));
+    });
+  });
+
+  group('Sample rate scaling', () {
+    final OggCafConverter oggCafConverter = OggCafConverter();
+
+    test('scales priming frames from non-48kHz sample rate such as 44.1kHz',
+        () {
+      // 44100 Hz CAF with 441 priming frames -> 480 pre-skip at 48000 Hz
+      final AudioFormat audioFormat = AudioFormat(
+        sampleRate: 44100,
+        formatID: FourByteString('opus'),
+        formatFlags: 0,
+        bytesPerPacket: 0,
+        framesPerPacket: 882,
+        channelsPerPacket: 1,
+        bitsPerChannel: 0,
+      );
+      final Uint8List dummyAudioData =
+          Uint8List.fromList(<int>[0x01, 0x02, 0x03]);
+      final PacketTable packetTable = PacketTable(
+        header: PacketTableHeader(
+          numberPackets: 1,
+          numberValidFrames: 882,
+          primingFrames: 441,
+          remainderFrames: 441,
+        ),
+        entries: <int>[3],
+        frameEntries: <int>[882],
+      );
+      final int packetTableSize = packetTable.encode().length;
+
+      final CafFile cafFile = CafFile(
+        fileHeader: FileHeader(
+          fileType: FourByteString('caff'),
+          fileVersion: 1,
+          fileFlags: 0,
+        ),
+        chunks: <Chunk>[
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.audioDescription,
+              chunkSize: 32,
+            ),
+            contents: audioFormat,
+          ),
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.packetTable,
+              chunkSize: packetTableSize,
+            ),
+            contents: packetTable,
+          ),
+          Chunk(
+            header: ChunkHeader(
+              chunkType: ChunkTypes.audioData,
+              chunkSize: 7,
+            ),
+            contents: AudioData(
+              editCount: 0,
+              data: dummyAudioData,
+            ),
+          ),
+        ],
+      );
+
+      final Uint8List cafBytes = cafFile.encode();
+      final Uint8List oggBytes = oggCafConverter.convertCafBytesToOgg(cafBytes);
+      expect(oggBytes, isNotEmpty);
+
+      // Verify preSkip in OpusHead is 480
+      // In Ogg, page 0 header is 28 bytes (27 + 1 segment byte),
+      // then OpusHead payload:
+      // 'OpusHead' (8 bytes), version (1 byte), channels (1 byte), preSkip (2 bytes uint16 LE)
+      // So offset is 28 + 8 + 1 + 1 = 38
+      final int preSkip =
+          ByteData.sublistView(oggBytes, 38, 40).getUint16(0, Endian.little);
+      expect(preSkip, equals(480));
     });
   });
 }
