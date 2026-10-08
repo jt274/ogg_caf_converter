@@ -10,6 +10,12 @@ class FourByteString {
   /// four UTF-8 bytes, it defaults to [0, 0, 0, 0].
   FourByteString(String string) : bytes = _encodeFourByteString(string);
 
+  /// Creates a FourByteString directly from bytes.
+  FourByteString.fromBytes(List<int> bytesList)
+      : bytes = bytesList.length == 4
+            ? List<int>.unmodifiable(bytesList)
+            : <int>[0, 0, 0, 0];
+
   /// The bytes representing the four-byte string.
   final List<int> bytes;
 
@@ -24,10 +30,20 @@ class FourByteString {
 
   @override
   bool operator ==(Object other) =>
-      other is FourByteString && bytes.toString() == other.bytes.toString();
+      identical(this, other) ||
+      (other is FourByteString &&
+          bytes.length == 4 &&
+          other.bytes.length == 4 &&
+          bytes[0] == other.bytes[0] &&
+          bytes[1] == other.bytes[1] &&
+          bytes[2] == other.bytes[2] &&
+          bytes[3] == other.bytes[3]);
 
   @override
   int get hashCode => Object.hashAll(bytes);
+
+  @override
+  String toString() => utf8.decode(bytes, allowMalformed: true);
 
   /// Encodes the four-byte string to a Uint8List.
   Uint8List encode() {

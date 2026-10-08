@@ -1,4 +1,22 @@
-# 0.3.0
+# 0.4.0
+
+## [0.4.0] - 2026-10-08
+
+### Added
+- Added pure in-memory byte methods: `convertCafBytesToOgg(Uint8List bytes)`, `convertOggBytesToCaf(Uint8List bytes)`, and `repackageOggBytes(Uint8List bytes)` without requiring filesystem access.
+- Added `OggReader.fromBytes(Uint8List bytes)` constructor for parsing Ogg streams directly from memory buffers.
+- Added EOS flag to `OpusTags` header when audio stream contains zero packets.
+- Added `FourByteString.fromBytes` constructor.
+- Expanded CI workflow with multi-OS matrix across Ubuntu, macOS, and Windows on both stable and dev Dart SDKs.
+
+### Fixed
+
+- Fixed `OggReader.filePath` initialization error when instantiating `OggReader`.
+- Fixed sample rate scaling between Apple CAF and OGG OPUS containers to support all input sample rates (including 44.1 kHz) per RFC 7845 and Apple CAF specifications.
+- `CafReader` optimizations.
+- `FourByteString` optimizations.
+- Ensured recursive parent directory creation (`recursive: true`) in all file-writing converters and guarded against accidental deletion during in-place conversions when `deleteInput: true`.
+- Added Linux, Windows, and macOS platform declarations in pubspec.
 
 ## [0.3.0] - 2026-10-07
 
