@@ -133,5 +133,66 @@ void main() {
         await reader.close();
       }
     });
+
+    test('parses granule position with all bits set (0xFF) as -1', () async {
+      final Uint8List page = Uint8List(27 + 1 + 4);
+      page.setRange(0, 4, 'OggS'.codeUnits);
+      page[4] = 0; // version
+      page[5] = 0; // header type
+      // Set 8 bytes of granule position to 0xFF (-1 in two's complement)
+      page.fillRange(6, 14, 0xFF);
+      page[26] = 1; // 1 segment
+      page[27] = 4; // segment length 4
+      page.fillRange(28, 32, 0x00);
+
+      final OggReader reader = OggReader.fromBytes(page);
+      try {
+        final OggPageResult result = await reader.parseNextPage();
+        expect(result.error, isNull);
+        expect(result.pageHeader, isNotNull);
+        expect(result.pageHeader!.granulePosition, equals(-1));
+      } finally {
+        await reader.close();
+      }
+    });
+
+    test(
+        'readOpusData ignores pages with granule position -1 when setting finalGranulePosition',
+        () async {
+      Uint8List makePage({
+        required int granulePos,
+        required int seq,
+        required Uint8List packet,
+      }) {
+        final Uint8List page = Uint8List(27 + 1 + packet.length);
+        page.setRange(0, 4, 'OggS'.codeUnits);
+        page[4] = 0;
+        page[5] = 0;
+        if (granulePos == -1) {
+          page.fillRange(6, 14, 0xFF);
+        } else {
+          ByteData.sublistView(page, 6, 14)
+              .setInt64(0, granulePos, Endian.little);
+        }
+        ByteData.sublistView(page, 18, 22).setUint32(0, seq, Endian.little);
+        page[26] = 1;
+        page[27] = packet.length;
+        page.setRange(28, 28 + packet.length, packet);
+        return page;
+      }
+
+      final Uint8List packet = Uint8List(4)..[0] = 0x80;
+      final Uint8List page1 = makePage(granulePos: 960, seq: 0, packet: packet);
+      final Uint8List page2 = makePage(granulePos: -1, seq: 1, packet: packet);
+      final Uint8List stream = Uint8List.fromList(<int>[...page1, ...page2]);
+
+      final OggReader reader = OggReader.fromBytes(stream);
+      try {
+        final OpusData data = await reader.readOpusData();
+        expect(data.finalGranulePosition, equals(960));
+      } finally {
+        await reader.close();
+      }
+    });
   });
 }
