@@ -1,3 +1,17 @@
+# 0.4.1
+
+## [0.4.1] - 2026-10-14
+
+### Fixed
+
+- Fixed web compilation failure caused by 64-bit integer literal `0xFFFFFFFFFFFFFFFF` rejecting compilation in `dart2js` / Flutter Web. Replaced sentinel with `-1` per RFC 3533 and RFC 7845 two's complement specifications (Fixes #7).
+
+### Added
+
+- Added unit tests for parsing and serializing granule position `-1` sentinels on unfinalized packet continuation pages.
+- Added automated web compilation test using `dart compile js`.
+- Added `web-build` job to GitHub Actions CI workflow to verify package compilation in Flutter Web and Dart-to-JS builds.
+
 # 0.4.0
 
 ## [0.4.0] - 2026-10-08
@@ -17,6 +31,8 @@
 - `FourByteString` optimizations.
 - Ensured recursive parent directory creation (`recursive: true`) in all file-writing converters and guarded against accidental deletion during in-place conversions when `deleteInput: true`.
 - Added Linux, Windows, and macOS platform declarations in pubspec.
+
+# 0.3.0
 
 ## [0.3.0] - 2026-10-07
 

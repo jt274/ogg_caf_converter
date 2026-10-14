@@ -446,7 +446,7 @@ class OggCafConverter {
 
     int currentPageGranulePosition() {
       if (!currentPageHasCompletedPacket && pageStartsWithContinuation) {
-        return 0xFFFFFFFFFFFFFFFF;
+        return -1;
       }
       return granulePosition;
     }

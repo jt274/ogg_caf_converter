@@ -324,7 +324,7 @@ class OggReader {
       }
 
       if (header != null &&
-          header.granulePosition != 0xFFFFFFFFFFFFFFFF &&
+          header.granulePosition != -1 &&
           segments.isNotEmpty) {
         finalGranulePosition = header.granulePosition;
       }

@@ -591,7 +591,7 @@ void main() {
             }
             previousSequence = header.index;
 
-            if (header.granulePosition != 0xFFFFFFFFFFFFFFFF) {
+            if (header.granulePosition != -1) {
               expect(header.granulePosition,
                   greaterThanOrEqualTo(previousGranulePosition));
               previousGranulePosition = header.granulePosition;
@@ -840,7 +840,7 @@ void main() {
             expectedSequence++;
             lastHeader = pageHeader;
 
-            if (pageHeader.granulePosition != 0xFFFFFFFFFFFFFFFF) {
+            if (pageHeader.granulePosition != -1) {
               expect(pageHeader.granulePosition,
                   greaterThanOrEqualTo(lastGranule));
               lastGranule = pageHeader.granulePosition;
@@ -1479,6 +1479,47 @@ void main() {
       final int preSkip =
           ByteData.sublistView(oggBytes, 38, 40).getUint16(0, Endian.little);
       expect(preSkip, equals(480));
+    });
+
+    group('Web compatibility and granule position sentinel', () {
+      test(
+          'sets granule position to -1 on continuation pages spanning multiple full pages',
+          () {
+        const int largePacketSize = 135000;
+        final Uint8List largePacket = Uint8List(largePacketSize)..[0] = 0x80;
+        final OggFile ogg = oggCafConverter.buildOggFile(
+          audioData: largePacket,
+          packetTable: <int>[largePacketSize],
+          channels: 1,
+          preSkip: 0,
+          sampleRate: 48000,
+          version: 1,
+          frameSize: 0,
+          repackage: false,
+        );
+
+        // Page 0: OpusHead
+        // Page 1: OpusTags
+        // Page 2: First audio page (starts packet)
+        // Page 3: Continuation page without completed packet -> should have granulePosition == -1
+        // Page 4: Final page completing packet
+        expect(ogg.pages.length, greaterThanOrEqualTo(5));
+        final OggPage continuationPage = ogg.pages[3];
+        expect(continuationPage.header.length, greaterThanOrEqualTo(14));
+
+        // In Ogg page header, bytes 6..14 contain the 64-bit granule position
+        final Uint8List granuleBytes = continuationPage.header.sublist(6, 14);
+        expect(
+          granuleBytes,
+          equals(Uint8List.fromList(
+              <int>[255, 255, 255, 255, 255, 255, 255, 255])),
+        );
+
+        final int parsedGranule =
+            ByteData.sublistView(continuationPage.header, 6, 14)
+                .getInt64(0, Endian.little);
+        expect(parsedGranule, equals(-1));
+      });
     });
   });
 }

@@ -20,8 +20,8 @@ jobs:
       matrix:
         sdk: [dev]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: dart-lang/setup-dart@e630b99d28a3b71860378cafdc2a067c71107f94
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
         with:
           sdk: ${{ matrix.sdk }}
       - id: install
@@ -44,8 +44,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         sdk: [stable, dev]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: dart-lang/setup-dart@e630b99d28a3b71860378cafdc2a067c71107f94
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
         with:
           sdk: ${{ matrix.sdk }}
       - id: install
@@ -70,8 +70,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: dart-lang/setup-dart@e630b99d28a3b71860378cafdc2a067c71107f94
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
         with:
           sdk: dev
       - name: Install dependencies
@@ -89,3 +89,32 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: coverage/lcov.info
+
+  web-build:
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - id: install
+        name: Install dependencies
+        run: dart pub get
+      - name: Verify Dart Web Compilation
+        run: dart compile js -o /tmp/example.js example/lib/main.dart
+      - name: Verify Flutter Web App Build
+        run: |
+          flutter create --platforms=web /tmp/test_web_app
+          cd /tmp/test_web_app
+          flutter pub add 'ogg_caf_converter:{"path":"'$GITHUB_WORKSPACE'"}'
+          cat << 'EOF' > lib/main.dart
+          import 'package:flutter/material.dart';
+          import 'package:ogg_caf_converter/ogg_caf_converter.dart';
+
+          void main() {
+            runApp(MaterialApp(home: Scaffold(body: Text('$OggCafConverter'))));
+          }
+          EOF
+          flutter build web
+
